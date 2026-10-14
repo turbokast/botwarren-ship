@@ -1,7 +1,7 @@
 import { VERSION } from '../src/version.ts';
 import { describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, normalize } from 'node:path';
 import { parsePairFlags, runPair, shipUrlOk, siteOrigin, type PairDeps } from '../src/pair.ts';
 import { applyOnboardingDelay, ONBOARDING_DELAY_SECONDS } from '../src/onboarding.ts';
 import { loadConfig } from '../src/config.ts';
@@ -53,7 +53,9 @@ describe('botwarren pair', () => {
     expect(h.text()).not.toContain(SECRET);
     // the config is valid for the agent, starts the short onboarding window and watches the folder it was run in
     const cfg = loadConfig(h.cfgFile, h.host);
-    expect(cfg).toMatchObject({ shipId: 'demo1', replicaUrl: 'https://demo1.botwarren.com', secretFile: h.secretFile, delaySeconds: 90 });
+    expect(cfg).toMatchObject({ shipId: 'demo1', replicaUrl: 'https://demo1.botwarren.com', delaySeconds: 90 });
+    // the harness fakes a Linux host on every runner, so the agent writes a POSIX-joined path; compare the file it names, not the spelling
+    expect(normalize(cfg.secretFile)).toBe(normalize(h.secretFile));
     expect(cfg.projects).toEqual([{ id: 'demo1', publicName: 'DEMO1 Project', realName: null, repoPaths: [h.repo] }]);
     expect(cfg.onboardingUntil).toBe(h.now() + 15 * 60_000);
     expect(h.startAgent).toHaveBeenCalledWith(h.cfgFile);
