@@ -6,6 +6,9 @@ export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
     fileParallelism: false,
+    // the agent boots in seconds on Linux but can take 15 s on a cold Windows runner
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
     coverage: { provider: 'v8', include: ['src/**/*.ts'], exclude: ['src/vendor/**', 'src/**/*.d.ts'], reporter: ['text-summary', 'json-summary', 'lcov'] },
   },
 });
