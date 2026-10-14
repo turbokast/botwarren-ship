@@ -12,6 +12,16 @@
 #   $env:BOTWARREN_NO_TASK=1    do not register the background task
 #   $env:BOTWARREN_NO_PATH=1    do not add the botwarren command to your user PATH
 #   $env:BOTWARREN_DRY_RUN=1    print what would happen, change nothing
+#   $env:BOTWARREN_CLAIM        single-use claim code from botwarren.com/get (zero-touch connect, see below)
+#   $env:BOTWARREN_NO_CONNECT=1 install only; do not connect this computer to a ship
+#   $env:BOTWARREN_NONINTERACTIVE=1  never start the device-code flow (scripts, provisioning)
+#
+# ZERO-TOUCH (what botwarren.com/get gives you: one command with a single-use claim code for your ship):
+#   $env:BOTWARREN_CLAIM='bwc_xxxx'; irm https://downloads.botwarren.com/install.ps1 | iex
+# The code works once and expires after 30 minutes, so it is worthless if it stays in your PowerShell history. It is read once,
+# removed from the environment, and handed to `botwarren connect` only through that one process's environment: never as an
+# argument, never written to a file, the scheduled task or a log, and never printed. Without a code, an interactive install ends
+# by starting the device-code flow (a short code and your browser).
 #
 # What it does: finds the archive for this CPU in install-index.txt, downloads it, checks its SHA-256, unpacks it to a temp
 # folder, runs `botwarren verify-release` (the signed manifest, Ed25519 key pinned in the agent, must contain exactly this
@@ -47,6 +57,11 @@ function Install-Botwarren {
   if ($WantVersion -eq 'latest') { $WantVersion = $null }
   # Windows-only steps (Scheduled Task, process listing, ACLs, the user PATH) are skipped elsewhere, so the rest can be tested with pwsh on Linux
   $IsWin = ($env:OS -eq 'Windows_NT')
+  # the claim code is read once and removed from the environment, so nothing this script starts can see it by accident
+  $Claim = $env:BOTWARREN_CLAIM
+  Remove-Item Env:\BOTWARREN_CLAIM -ErrorAction SilentlyContinue
+  $NoConnect = ($env:BOTWARREN_NO_CONNECT -eq '1')
+  $Interactive = ($env:BOTWARREN_NONINTERACTIVE -ne '1') -and (-not $IsWin -or [Environment]::UserInteractive)
 
   function Write-Step([string]$Text) { Write-Host "==> $Text" -ForegroundColor Cyan }
   function Fail([string]$Text) { throw "install: $Text" }
@@ -59,6 +74,8 @@ function Install-Botwarren {
     return [IO.File]::ReadAllText($f)
   }
 
+  # check the claim code's shape BEFORE downloading anything, and never print it (not even in an error)
+  if ($Claim -and $Claim -notmatch '^bwc_[A-Za-z0-9_-]{20,80}$') { Fail 'that command looks cut off or changed (the claim code is not valid). Copy it again from https://botwarren.com/get' }
   if ($WantVersion -and $WantVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') { Fail 'BOTWARREN_VERSION must look like 1.2.3 (or latest)' }
   if ($BaseUrl -notmatch '^https://' -and $BaseUrl -notmatch '^http://(127\.0\.0\.1|localhost)') { Fail "the download base must be https (got: $BaseUrl)" }
   if (-not $env:LOCALAPPDATA) { Fail 'LOCALAPPDATA is not set - run this from a normal user session.' }
@@ -74,6 +91,7 @@ function Install-Botwarren {
   Write-Host "  task        : $(if ($NoTask) { 'not registered' } else { $TaskName })"
   Write-Host "  downloads   : $BaseUrl"
   if ($ChecksumOnly) { Write-Host '  verification: SHA256SUMS over HTTPS only (no signed manifest); auto-update will be DISABLED' } else { Write-Host '  verification: signed release manifest' }
+  if ($NoConnect) { Write-Host '  connect     : no (BOTWARREN_NO_CONNECT)' } elseif ($Claim) { Write-Host '  connect     : with your single-use claim code (not shown)' } else { Write-Host '  connect     : device code (an interactive install only)' }
   if ($DryRun) { Write-Host 'dry run: nothing was downloaded or changed.'; return }
 
   New-Item -ItemType Directory -Force -Path $Tmp | Out-Null
@@ -237,11 +255,34 @@ function Install-Botwarren {
     Write-Host ''
     Write-Host "Botwarren $NewVersion is installed." -ForegroundColor Green
     if ($ChecksumOnly) { Write-Host 'Auto-update is DISABLED for this install (no signed update manifest exists yet). Verified: SHA-256 over HTTPS. To update, run this installer again.' }
+    # connect this computer to the ship (after the task is registered). The claim code goes ONLY into the environment of the one
+    # `connect` process, then it is dropped. It is never an argument, a file, the scheduled task or output.
     $cfg = if ($env:APPDATA) { Join-Path $env:APPDATA 'Botwarren\config.json' } else { '' }
-    if ($cfg -and (Test-Path -LiteralPath $cfg)) { Write-Host 'Your existing configuration was kept. The ship agent is running in the background.' }
-    else { Write-Host "Next: connect this computer to your ship:   $BinDir\botwarren.cmd pair"; Write-Host '(the agent starts by itself as soon as the connection is set up)' }
-    Write-Host "Check updates and options: $BinDir\botwarren.cmd update status    Tools it can see: $BinDir\botwarren.cmd adapters"
-    Write-Host "Remove everything:        $Root\uninstall.ps1   (add -KeepConfig to keep your settings)"
+    $botwarren = Join-Path $BinDir 'botwarren.cmd'
+    if ($NoConnect) {
+      Write-Host "Not connected (BOTWARREN_NO_CONNECT). When you are ready, get your command at https://botwarren.com/get or run: $botwarren connect"
+    } elseif ($Claim) {
+      Write-Step 'Connecting this computer to your ship'
+      $env:BOTWARREN_CLAIM = $Claim
+      try { & $botwarren connect; $rc = $LASTEXITCODE } catch { $rc = 1 } finally { Remove-Item Env:\BOTWARREN_CLAIM -ErrorAction SilentlyContinue; $Claim = $null }
+      if ($rc -eq 0) { Write-Host 'Connected! Watch it appear at https://botwarren.com/get (or open your ship from https://botwarren.com/account).' -ForegroundColor Green }
+      elseif ($rc -eq 3) { Write-Host 'This computer was already connected, so nothing changed.' }
+      else {
+        Write-Host 'Botwarren is installed, but this computer could not be connected.' -ForegroundColor Yellow
+        Write-Host 'The claim code works once and expires after 30 minutes. If it expired, or the network was down, open https://botwarren.com/get for a fresh command.'
+      }
+    } elseif ($cfg -and (Test-Path -LiteralPath $cfg)) {
+      Write-Host 'Your existing setup was kept. The ship agent keeps running in the background and updates itself.'
+    } elseif ($Interactive) {
+      Write-Step 'Connecting this computer to your ship (a short code, then your browser)'
+      try { & $botwarren connect; $rc = $LASTEXITCODE } catch { $rc = 1 }
+      if ($rc -ne 0 -and $rc -ne 3) { Write-Host "Could not connect right now. Botwarren is installed; open https://botwarren.com/get to connect this computer, or run: $botwarren connect" }
+    } else {
+      Write-Host 'Open https://botwarren.com/get to connect this computer.'
+    }
+    Write-Host "Status: $botwarren status     Tools it can see: $botwarren adapters     Updates: $botwarren update status"
+    Write-Host 'Everything else (projects, names, delay, pause, disconnect) is on https://botwarren.com/account'
+    Write-Host "Remove it:  botwarren uninstall   (or $Root\uninstall.ps1; add -KeepConfig to keep your settings)"
   }
   finally { Remove-Item -LiteralPath $Tmp -Recurse -Force -ErrorAction SilentlyContinue }
 }

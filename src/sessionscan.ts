@@ -28,12 +28,14 @@ export interface ScannerOptions {
   reobserveMs?: number;
   discoverMs?: number;
   cwdTtlMs?: number;
+  /** changes whenever the project list changes: sessions are attributed again at once */
+  epoch?: () => number;
   maxSessions?: number;
 }
 
 interface Tracked {
   key: string; path: string; status: 'working' | 'idle' | null; projectId: string | null;
-  lastEmit: number; cwd: string | null; cwdAt: number; resolved: boolean; mtimeMs: number;
+  lastEmit: number; emittedProject?: string | null; cwd: string | null; cwdAt: number; resolved: boolean; mtimeMs: number;
 }
 
 /** What the Codex pairing logic needs to know about a live Claude MAIN session. */
@@ -73,11 +75,12 @@ export class SessionScanner {
   private readonly tracked = new Map<string, Tracked>();
   private readonly tails = new Map<string, ClaudeLogTail>();
   private lastDiscover = -Infinity;
+  private seenEpoch = 0;
   private readonly subagents: SubagentWatcher;
 
   constructor(opts: ScannerOptions) {
     this.o = {
-      workingMs: 20_000, endedMs: 30 * 60_000, reobserveMs: 120_000, discoverMs: 15_000, cwdTtlMs: 60_000, maxSessions: 200, ...opts,
+      workingMs: 20_000, endedMs: 30 * 60_000, reobserveMs: 120_000, discoverMs: 15_000, cwdTtlMs: 60_000, maxSessions: 200, epoch: () => 0, ...opts,
     };
     for (const d of opts.dirs) this.tails.set(d, new ClaudeLogTail(d));
     this.subagents = new SubagentWatcher({ instance: opts.instance, source: 'collector', tailFor: (path) => this.tailFor(path) });
@@ -127,6 +130,8 @@ export class SessionScanner {
     const nowMs = now.getTime();
     if (nowMs - this.lastDiscover >= this.o.discoverMs) { this.discover(nowMs); this.lastDiscover = nowMs; }
     const out: CanonicalEventInput[] = [];
+    const ep = this.o.epoch();
+    if (ep !== this.seenEpoch) { this.seenEpoch = ep; for (const t of this.tracked.values()) t.cwdAt = -Infinity; } // the project list changed: attribute again now
     const work = [...this.tracked.values()].map(async (t) => {
       let mtime: number;
       try { mtime = statSync(t.path).mtimeMs; } catch { mtime = -Infinity; }
@@ -146,7 +151,8 @@ export class SessionScanner {
         const a = await this.o.attributor.attribute(cwd, nowMs);
         t.projectId = a.projectId; t.resolved = cwd !== null || t.resolved;
       }
-      if (t.status !== status || t.lastEmit === 0 || nowMs - t.lastEmit >= this.o.reobserveMs) {
+      if (t.status !== status || t.lastEmit === 0 || t.emittedProject !== t.projectId || nowMs - t.lastEmit >= this.o.reobserveMs) {
+        t.emittedProject = t.projectId;
         t.status = status; t.lastEmit = nowMs;
         out.push(sessionObserved({ instance: this.o.instance, key: t.key, status, projectId: t.projectId, at: now, priv: { cwd: t.cwd, log: basename(t.path), attribution: t.projectId ? 'matched' : 'unattributed' } }));
       }

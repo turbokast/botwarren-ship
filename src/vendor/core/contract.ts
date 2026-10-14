@@ -16,3 +16,4 @@ export * from './reducer.ts';
 export * from './projection.ts';
 export * from './public.ts';
 export * from './remote.ts';
+export * from './agentlink.ts';

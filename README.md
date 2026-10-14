@@ -66,7 +66,7 @@ curl -fsSL https://downloads.botwarren.com/install.sh | sh
 irm https://downloads.botwarren.com/install.ps1 | iex
 ```
 
-Then connect the computer to your ship: `botwarren pair` shows a code, you approve it on botwarren.com.
+**Connecting is part of the install.** On botwarren.com press *Get a ship*: the page shows one command made for your ship (it contains a single-use claim code that expires after 30 minutes and can only claim that ship; it is passed to the installer in the environment, so it does not show in the process list). Run it and the installer connects the computer, starts the agent, and the website switches to "Connected" by itself. Everything after that (which projects the ship shows, publish delay, tools, disconnect) is done on the website. If you run the plain installer instead, it shows a short code and opens your browser to approve it (on a machine with no desktop it prints the code and address once). Remove everything with `botwarren uninstall`.
 
 The installers have two ways to decide that the download is the real one:
 
@@ -115,12 +115,14 @@ botwarren adapters [explain <id>]    which tools it can see, and exactly what ea
 botwarren run -- <build command>     report a build or test run as CI activity (the command text is never sent)
 botwarren pause | resume             emergency stop and resume of publishing
 botwarren ops                        where your private local ops room is
-botwarren pair                       connect this computer to your ship (a code that you approve on botwarren.com)
+botwarren connect                    connect this computer to your ship (the website's command does this; or a code you approve on botwarren.com)
+botwarren uninstall                  remove the agent from this computer (and tell botwarren.com)
+botwarren pair                       older name for connect without a claim command (--repo adds a project folder by hand)
 botwarren login                      sign in to botwarren.com as the owner of your ship
 botwarren update [status]            updates (see below)
 ```
 
-`botwarren pair` connects a computer to a ship with a one-time code: no secret to copy. The ship secret is written to a separate file that only you can read and is never printed. The configuration file (`config.json` in `~/.config/botwarren-ship/` or `%APPDATA%\Botwarren\`) has its schema in [`src/config.ts`](src/config.ts).
+`botwarren connect` connects a computer to a ship with a single-use claim code (or a device code you approve): no long-lived secret is ever pasted. The ship secret is written to a separate file that only you can read and is never printed. Projects need no configuration: the agent notices git checkouts from the folders of your coding sessions and reports only an opaque key and a display name to your own website account (never a path); nothing is published until you switch a project on there. The configuration file (`config.json` in `~/.config/botwarren-ship/` or `%APPDATA%\Botwarren\`) has its schema in [`src/config.ts`](src/config.ts).
 
 ### Tools it can see
 

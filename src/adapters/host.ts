@@ -35,6 +35,7 @@ export interface HostOptions {
   host: Host;
   projects: ProjectRef[];
   attribute: (cwd: string | null | undefined, nowMs: number) => Promise<string | null>;
+  attributionEpoch?: () => number;
   log: (msg: string) => void;
   reobserveMs?: number;
   maxSessions?: number;
@@ -76,7 +77,7 @@ export class AdapterHost {
     const port = settings.port ?? 0;
     const ctx: AdapterContext = {
       host: this.o.host, instance: this.o.instance, settings, projects: this.o.projects,
-      attribute: this.o.attribute,
+      attribute: this.o.attribute, attributionEpoch: this.o.attributionEpoch ?? (() => 0),
       http: port > 0 && allow.length > 0
         ? makeLoopbackHttp({ allow, port, ...(settings.host ? { host: settings.host } : {}) })
         : { get: () => Promise.reject(new PolicyError('no loopback access declared')), sse: () => Promise.reject(new PolicyError('no loopback access declared')) },

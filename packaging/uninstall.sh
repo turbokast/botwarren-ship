@@ -11,6 +11,7 @@
 #   --keep-config   keep ~/.config/botwarren-ship (config.json, ship.secret) so a reinstall reconnects at once
 #   --keep-data     keep ~/.local/share/botwarren-ship (the local private journal)
 #   --yes           do not ask (required when not run from a terminal)
+# Safe to run twice (nothing left to remove is not an error). Never needs root. Prints exactly what it removed and what it left.
 # Source: https://github.com/turbokast/botwarren-ship (apps/shipagent/packaging/uninstall.sh)
 set -u
 
@@ -21,7 +22,7 @@ main() {
       --yes|-y) YES=1 ;;
       --keep-config) KEEP_CONFIG=1 ;;
       --keep-data) KEEP_DATA=1 ;;
-      -h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; return 0 ;;
+      -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; return 0 ;;
       *) printf 'uninstall: unknown option %s\n' "$a" >&2; return 2 ;;
     esac
   done
@@ -49,14 +50,14 @@ main() {
   printf '==> Stopping the service\n'
   if [ "$OS" = Darwin ]; then
     for l in com.turbokast.botwarren com.botwarren.ship; do launchctl bootout "gui/$(id -u)/$l" >/dev/null 2>&1 || true; done
-    rm -f "$HOME/Library/LaunchAgents/com.turbokast.botwarren.plist" "$HOME/Library/LaunchAgents/com.botwarren.ship.plist"
+    drop "$HOME/Library/LaunchAgents/com.turbokast.botwarren.plist" "$HOME/Library/LaunchAgents/com.botwarren.ship.plist"
   else
     if command -v systemctl >/dev/null 2>&1; then
       for u in botwarren.service botwarren-ship.service; do systemctl --user disable --now "$u" >/dev/null 2>&1 || true; done
-      rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/botwarren.service" "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/botwarren-ship.service"
+      drop "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/botwarren.service" "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/botwarren-ship.service"
       systemctl --user daemon-reload >/dev/null 2>&1 || true
     fi
-    rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/autostart/botwarren.desktop"
+    drop "${XDG_CONFIG_HOME:-$HOME/.config}/autostart/botwarren.desktop"
   fi
   # a launcher started by hand or by autostart
   if [ -f "$ROOT/state/launcher.lock" ]; then
@@ -66,14 +67,23 @@ main() {
   fi
 
   printf '==> Removing the command and program files\n'
-  rm -f "$BIN_DIR/botwarren"
-  rm -rf "$LEGACY_DIR"
-  rm -f "$HOME/.local/bin/botwarren"   # the previous installer's wrapper lived here too
-  rm -rf "$ROOT"
+  drop "$BIN_DIR/botwarren"
+  drop "$LEGACY_DIR"
+  drop "$HOME/.local/bin/botwarren"   # the previous installer's wrapper lived here too
+  drop "$ROOT"
 
-  if [ "$KEEP_DATA" != 1 ]; then rm -rf "$DATA_DIR"; else printf '    kept local data: %s\n' "$DATA_DIR"; fi
-  if [ "$KEEP_CONFIG" != 1 ]; then rm -rf "$CFG_DIR"; else printf '    kept config: %s\n' "$CFG_DIR"; fi
-  printf 'Removed. Public events already published stay on your public page until you delete your ship on the website.\n'
+  if [ "$KEEP_DATA" != 1 ]; then drop "$DATA_DIR"; else printf '    kept local data: %s\n' "$DATA_DIR"; fi
+  if [ "$KEEP_CONFIG" != 1 ]; then drop "$CFG_DIR"; else printf '    kept config (your ship secret stays on this computer): %s\n' "$CFG_DIR"; fi
+  if [ "$REMOVED" = 0 ]; then printf 'Nothing to remove: Botwarren was not installed here (or was already removed).\n'; else printf 'Removed %s item(s).\n' "$REMOVED"; fi
+  printf 'Not touched: any PATH line you added to a shell profile (the installer never edits your profile), and public events already published, which stay on your public page until you delete your ship on the website. To disconnect the computer from your ship, use "Disconnect this computer" on https://botwarren.com/account.\n'
+}
+
+# removes files or folders (idempotent) and says what really went
+REMOVED=0
+drop() {
+  for p in "$@"; do
+    if [ -e "$p" ] || [ -L "$p" ]; then rm -rf "$p"; printf '    removed %s\n' "$p"; REMOVED=$((REMOVED + 1)); fi
+  done
 }
 
 safe_root() {

@@ -6,8 +6,19 @@ A release is only built from a dated entry in this file: the release workflow ta
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-14
+
+Zero-touch onboarding: install once, and everything else happens on the website.
+
 ### Added
 
+- `botwarren connect`: connects this computer to a ship. The personalised command on botwarren.com/get carries a **claim token** (single use, valid for 30 minutes, able to do exactly one thing: claim one ship). The agent exchanges it once for its own ship secret, which goes into a file only you can read. Without a token it falls back to a short device code and opens your browser (or prints the code once on a machine with no desktop or over SSH). The token is passed to the installer through the environment, never written to disk, a service definition or a log.
+- Both installers accept the claim token (`BOTWARREN_CLAIM`; `install.sh` also takes `--claim`), validate its shape before downloading anything, run `connect` after the per-user service is registered, and print what happened in plain words. `--no-connect` installs only.
+- **Projects are noticed, not configured.** The agent recognises a git checkout from the folder of the coding sessions it already sees. It reports an opaque key and a display name (repository name, else folder name) to your website account only; a local path never leaves the computer. Nothing is published until you switch a project on at botwarren.com, where you can also rename it. `discovery.names: false` reports "Project N" instead of names.
+- Settings from the website, validated and clamped by the agent: which noticed projects are shown, publish delay (30 to 120 s), and which tools are switched off. The website can only choose among things the agent itself reported; it cannot make the agent read anything else or run anything.
+- A per-computer report to your owner console (computer kind, agent version, which tools were found, noticed projects) over a separate authenticated route; it is never part of the public data.
+- `botwarren uninstall`: tells the website, then runs the installed uninstall script (service, command, program files and, unless kept, config and data). `botwarren status` now shows the website link, noticed and shown projects and tool states.
+- Disconnect from the website: after sustained refusals (several, over minutes) the agent forgets its secret and idles until it is connected again.
 - Code scanning with CodeQL (JavaScript, TypeScript and GitHub Actions workflows), the OpenSSF Scorecard, a dependency review on pull requests (known vulnerabilities and a licence allow-list), and the `zizmor` and `actionlint` linters for the workflow files.
 - ESLint (typescript-eslint) aimed at real bugs: floating and misused promises, unused code. Strict `tsc` remains the type gate.
 - A V8 coverage report on every CI run (job summary and downloadable artifact).
@@ -17,6 +28,9 @@ A release is only built from a dated entry in this file: the release workflow ta
 
 ### Changed
 
+- `botwarren pair` and the first run no longer ask for a project folder; `--repo` still adds one by hand. The browser is not opened over SSH or on a Linux machine with no display.
+- A session is attributed to a project again as soon as you show or hide it on the website, instead of up to a minute later.
+- The `botwarren login` step is no longer needed: an account on botwarren.com owns the ships it creates.
 - The GitHub Release body is now taken from this changelog instead of being generated from commit titles.
 - Dependabot waits 7 days before proposing a freshly published version and labels its pull requests.
 - The release build also runs the linter.
@@ -54,5 +68,6 @@ First public release of the agent's source (Apache-2.0).
 
 - The agent reads and sends metadata only (enums, bounded integers and id-like keys). There is no free-text field in the event format, no telemetry, and the updater never runs code that is not listed in a validly signed manifest with a matching SHA-256.
 
-[Unreleased]: https://github.com/turbokast/botwarren-ship/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/turbokast/botwarren-ship/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/turbokast/botwarren-ship/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/turbokast/botwarren-ship/releases/tag/v0.5.0

@@ -38,6 +38,9 @@ export class ProjectAttributor {
 
   constructor(projects: ProjectRef[], remote: GitRemoteFn = gitRemote) { this.projects = projects; this.remote = remote; }
 
+  /** the project list changed (a project was shown or hidden): forget the remotes worked out for the old list */
+  reset(): void { this.projectRemotes = null; }
+
   private async remoteOf(dir: string, now: number): Promise<string | null> {
     const hit = this.cache.get(dir);
     if (hit && now - hit.at < TTL_MS) return hit.v;

@@ -35,7 +35,10 @@ export const ShipConfigSchema = z.object({
    * delay so the first crew member shows up fast, then it returns to `delaySeconds`. Absent = never.
    */
   onboardingUntil: z.string().datetime().optional(),
-  projects: z.array(ProjectConfig).min(1).max(8),
+  /** Hand-configured projects. Optional since 0.6: with none, the agent notices projects from your coding sessions and you choose on the website. */
+  projects: z.array(ProjectConfig).max(8).default([]),
+  /** zero-config discovery: { "names": false } reports "Project N" instead of repository names to your website account */
+  discovery: z.object({ names: z.boolean().default(true) }).strict().optional(),
   harnessLogDirs: z.array(z.string().min(1)).min(1).optional(),
   /** Codex session log roots (default ~/.codex/sessions). Empty list disables Codex pairing. */
   codexLogDirs: z.array(z.string().min(1)).max(4).optional(),
@@ -62,6 +65,7 @@ export interface ShipConfig {
   projects: { id: string; publicName: string; realName: string | null; repoPaths: string[] }[];
   harnessLogDirs: string[];
   codexLogDirs: string[];
+  discoveryNames: boolean;
   opsPort: number;
   demo: boolean;
   dataDir: string;
@@ -81,6 +85,7 @@ export function resolveConfig(raw: unknown, host: Host = currentHost()): ShipCon
     delaySeconds: c.delaySeconds,
     onboardingUntil: c.onboardingUntil ? Date.parse(c.onboardingUntil) : null,
     projects: c.projects.map((p) => ({ id: p.id, publicName: p.publicName ?? defaultPublicName(c.shipId), realName: p.realName ?? null, repoPaths: p.repoPaths })),
+    discoveryNames: c.discovery?.names ?? true,
     harnessLogDirs: c.harnessLogDirs ?? defaultHarnessDirs(host),
     codexLogDirs: c.codexLogDirs ?? defaultCodexDirs(host),
     opsPort: c.opsPort,

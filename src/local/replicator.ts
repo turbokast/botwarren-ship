@@ -99,6 +99,8 @@ export class Replicator {
   /** Wall-clock ms before which no publish is attempted (a `Retry-After`, or the backoff after consecutive failures). */
   retryAtMs = 0;
   private fails = 0;
+  /** consecutive publishes the website refused with 401 (secret revoked or replaced), and when that started; any other answer resets it */
+  unauthorized: { count: number; since: number | null } = { count: 0, since: null };
   private lastAttemptMs = 0;
   private lastMetaSig = '';
   /** per-cycle jitter on the wait (0.9 .. 1.1) so a fleet that restarts together does not stay in step */
@@ -129,6 +131,7 @@ export class Replicator {
         redirect: 'error', // the bearer secret must never follow a redirect
       });
       if (!res.ok) {
+        if (res.status === 401) { this.unauthorized = { count: this.unauthorized.count + 1, since: this.unauthorized.since ?? this.now() }; } else this.unauthorized = { count: 0, since: null };
         // 503/429/507 carry Retry-After and the cadence to use afterwards (the body is small JSON; anything else is ignored)
         const wait = parseRetryAfter(res.headers.get('retry-after'), this.now());
         if (wait !== null) this.retryAtMs = this.now() + wait;
@@ -147,7 +150,7 @@ export class Replicator {
       const settings = ReplicaSettings.safeParse(r.settings);
       this.settings = settings.success ? settings.data : null;
       this.cadence = parseCadence(r) ?? DEFAULT_CADENCE; // a server that stops sending it (a rollback) puts us back on the old cadence
-      this.fails = 0; this.retryAtMs = 0;
+      this.fails = 0; this.retryAtMs = 0; this.unauthorized = { count: 0, since: null };
       this.cfg.onSettings?.(this.settings);
       this.lastOkAt = new Date().toISOString();
       this.lastError = null;

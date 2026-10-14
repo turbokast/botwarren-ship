@@ -55,6 +55,14 @@ export const ReplicaSettings = z.object({
   look: z.unknown().optional(),
   /** when that look (a ShipLook, or a ShipPlan v2 `{v:2,...}`) was last changed on the website (ISO time); the most recent change wins against a local edit */
   lookAt: z.string().max(40).optional(),
+  /**
+   * Zero-touch onboarding (see agentlink.ts): the owner's choices about the projects the agent NOTICED, the publish delay and which tools are off.
+   * Typed loosely here on purpose: a bad value in one of them must never drop `paused` or `showRealNames`; the agent validates each with
+   * parseProjectChoices / parseDelay / parseAdaptersOff and clamps. Absent = no choice made.
+   */
+  projects: z.unknown().optional(),
+  delaySeconds: z.unknown().optional(),
+  adapters: z.unknown().optional(),
 });
 export type ReplicaSettings = z.infer<typeof ReplicaSettings>;
 

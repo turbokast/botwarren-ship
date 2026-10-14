@@ -29,6 +29,8 @@ export const PLAN_MAX_BYTES = 8192;
 export const MAX_ROW_ROOMS = 8;
 export const MAX_DECOR = 24;
 export const MAX_AMENITIES = 4;
+/** Hall of Fame statues a ship can stand on its hull sockets */
+export const MAX_STATUES = 8;
 /** published versions kept per ship (history / restore) */
 export const HISTORY_CAP = 10;
 
@@ -64,6 +66,10 @@ export type RoomOverride = z.infer<typeof RoomOverride>;
 export const PlanDecor = z.object({ k: z.enum(DECOR_KINDS), a: z.number().int().min(0).max(63), f: z.boolean().default(false) }).strict();
 export type PlanDecor = z.infer<typeof PlanDecor>;
 
+/** A Hall of Fame statue on a hull socket (the same 0-63 sockets as `decor`): `id` is one of the ship's own earned statues (the cloud checks that), `f` mirrors it. */
+export const PlanStatue = z.object({ id: z.string().regex(/^st-[a-f0-9]{8}$/), a: z.number().int().min(0).max(63), f: z.boolean().default(false) }).strict();
+export type PlanStatue = z.infer<typeof PlanStatue>;
+
 export const ShipPlanV2 = z.object({
   v: z.literal(2),
   /** generator seed for everything left Auto ("Remix" changes it); 0 = derived from the ship id alone */
@@ -76,6 +82,8 @@ export const ShipPlanV2 = z.object({
   rows: z.object({ N: z.array(PlanRoomId).max(MAX_ROW_ROOMS), S: z.array(PlanRoomId).max(MAX_ROW_ROOMS) }).strict().optional(),
   rm: z.record(PlanRoomId, RoomOverride).optional(),
   decor: z.array(PlanDecor).max(MAX_DECOR).optional(),
+  /** earned statues placed on the hull; optional, so a ship without any (every plan before statues) is unchanged */
+  statues: z.array(PlanStatue).max(MAX_STATUES).optional(),
 }).strict().superRefine((p, ctx) => {
   const bad = (message: string, path: (string | number)[] = []) => ctx.addIssue({ code: 'custom', message, path });
   if (p.rows) {
@@ -89,6 +97,14 @@ export const ShipPlanV2 = z.object({
   if (p.decor) {
     const seen = new Set<number>();
     p.decor.forEach((d, i) => { if (seen.has(d.a)) bad('two parts on one socket', ['decor', i]); seen.add(d.a); });
+  }
+  if (p.statues) {
+    const ids = new Set<string>(), sockets = new Set<number>((p.decor ?? []).map((d) => d.a));
+    p.statues.forEach((t, i) => {
+      if (ids.has(t.id)) bad('a statue is placed twice', ['statues', i]);
+      if (sockets.has(t.a)) bad('two things on one socket', ['statues', i]);
+      ids.add(t.id); sockets.add(t.a);
+    });
   }
 });
 export type ShipPlanV2 = z.infer<typeof ShipPlanV2>;
@@ -119,6 +135,7 @@ export function canonicalPlan(plan: ShipPlanV2): ShipPlanV2 {
     if (Object.keys(rm).length) out.rm = rm;
   }
   if (plan.decor) out.decor = plan.decor.map((d) => (d.f ? { k: d.k, a: d.a, f: true } : { k: d.k, a: d.a }));
+  if (plan.statues?.length) out.statues = plan.statues.map((t) => (t.f ? { id: t.id, a: t.a, f: true } : { id: t.id, a: t.a }));
   return out as unknown as ShipPlanV2;
 }
 
@@ -148,6 +165,7 @@ const ROLE = /^r(\d{2})$/;
 
 const mapIds = (plan: ShipPlanV2, f: (id: string) => string | null): ShipPlanV2 => {
   const out: ShipPlanV2 = { ...plan };
+  delete out.statues; // earned statues belong to one ship: a blueprint code never carries them
   if (plan.rows) {
     const seen = new Set<string>();
     const map = (ids: string[]) => ids.map(f).filter((x): x is string => x !== null && !seen.has(x) && !!seen.add(x));

@@ -27,6 +27,8 @@ export interface PrivateConfig {
   shipManifest: ShipManifest;
   /** Host names (port ignored) this loopback service answers to; anything else is refused (DNS rebinding). Default 127.0.0.1, localhost, [::1]. */
   allowedHosts?: string[];
+  /** extra, non-secret facts for the local `botwarren status` (cloud link health, noticed projects); merged into the ops state */
+  statusExtra?: () => Record<string, unknown>;
 }
 
 const LOOPBACK_HOSTS = ['127.0.0.1', 'localhost', '[::1]'];
@@ -93,6 +95,27 @@ export class PrivateService {
     const ids = (m: ShipManifest) => m.projects.map((p) => p.id).join(',');
     if (ids(parsed) !== ids(ShipManifest.parse(this.cfg.shipManifest))) throw new Error('manifest project ids may not change');
     this.cfg.shipManifest = parsed;
+    this.syncPublicMeta();
+  }
+
+  /**
+   * Replaces the set of projects that may be published AND the public manifest together (zero-touch onboarding: the owner chose projects
+   * on the website). A project that stops being public takes its published history with it (the same purge as a startup revocation),
+   * and anything still queued for it is dropped at publication time by the re-check against the allowlist.
+   */
+  setProjects(ids: ProjectId[], manifest: ShipManifest): void {
+    const next = new Set(ids);
+    const removed = this.cfg.publicProjects.filter((p) => !next.has(p));
+    const parsed = ShipManifest.parse(manifest);
+    this.cfg.publicProjects = [...next];
+    const live = this.policy.publicProjects as Set<ProjectId>; // created as a Set in the constructor; the policy only ever reads it
+    live.clear();
+    for (const id of next) live.add(id);
+    this.cfg.shipManifest = parsed;
+    if (removed.length) {
+      const had = this.pub.db.prepare("SELECT 1 FROM events WHERE json_extract(body, '$.project') IN (" + removed.map(() => '?').join(',') + ') LIMIT 1').get(...removed);
+      if (had) { this.purgePublic('project_hidden'); this.store.audit('cloud', 'project_hidden', String(removed.length), this.now().toISOString()); }
+    }
     this.syncPublicMeta();
   }
 
@@ -269,6 +292,7 @@ export class PrivateService {
       quarantineCounts: this.store.quarantineCounts(),
       quarantine: this.store.quarantined(30),
       audit: this.store.audits(30),
+      ...(this.cfg.statusExtra ? { cloud: this.cfg.statusExtra() } : {}),
       recent: this.store.recentEvents(40).map((e) => ({ eventId: e.eventId, type: e.type, source: e.source, occurredAt: e.occurredAt, private: e.private })),
     };
   }

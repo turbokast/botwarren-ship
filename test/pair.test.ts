@@ -32,7 +32,7 @@ function harness(script: Script, over: Partial<PairDeps> = {}) {
   }) as unknown as typeof fetch;
   const opener = vi.fn(async (_u: string) => true);
   const startAgent = vi.fn(async (_c: string) => 'restarted' as const);
-  const deps: PairDeps = { fetchImpl, opener, out: (s) => outs.push(s), err: (s) => errs.push(s), host, env: {}, cwd: repo, now: () => clock, sleep: async (ms) => { clock += ms; }, startAgent, agentUp: async () => true, restrictFile: async () => undefined, interactive: false, ...over };
+  const deps: PairDeps = { fetchImpl, opener, out: (s) => outs.push(s), err: (s) => errs.push(s), host, env: { DISPLAY: ':0' }, cwd: repo, now: () => clock, sleep: async (ms) => { clock += ms; }, startAgent, agentUp: async () => true, restrictFile: async () => undefined, interactive: false, ...over };
   const text = () => outs.join('') + errs.join('');
   return { deps, outs, errs, text, calls, opener, startAgent, root, repo, host, // the fake host is Linux on every runner, so the agent joins its paths POSIX-style: build the expectations the same way
     cfgFile: posix.join(root, 'cfg', 'botwarren-ship', 'config.json'), secretFile: posix.join(root, 'cfg', 'botwarren-ship', 'ship.secret'), now: () => clock };
@@ -57,7 +57,7 @@ describe('botwarren pair', () => {
     expect(cfg).toMatchObject({ shipId: 'demo1', replicaUrl: 'https://demo1.botwarren.com', delaySeconds: 90 });
     // the harness fakes a Linux host on every runner, so the agent writes a POSIX-joined path; compare the file it names, not the spelling
     expect(normalize(cfg.secretFile)).toBe(normalize(h.secretFile));
-    expect(cfg.projects).toEqual([{ id: 'demo1', publicName: 'DEMO1 Project', realName: null, repoPaths: [h.repo] }]);
+    expect(cfg.projects).toEqual([]); // zero-config: projects are noticed from sessions and chosen on the website
     expect(cfg.onboardingUntil).toBe(h.now() + 15 * 60_000);
     expect(h.startAgent).toHaveBeenCalledTimes(1);
     expect(normalize(h.startAgent.mock.calls[0]![0])).toBe(normalize(h.cfgFile)); // same file, whatever the separator spelling on a Windows runner
@@ -82,16 +82,20 @@ describe('botwarren pair', () => {
     expect(cfg.projects[0]).toMatchObject({ publicName: 'Dragon Game', repoPaths: [join(h.root, 'other')] });
   });
 
-  it('a first run outside any git checkout asks for a folder, or explains --repo when it cannot ask', async () => {
-    const h = harness({ polls: [j(200, PAIRED)] }, { findRepo: () => null });
-    expect(await runPair([], h.deps)).toBe(2);
-    expect(h.text()).toMatch(/--repo <folder>/);
-    expect(h.calls).toHaveLength(0); // nothing was started on the server
-    let answer = '';
-    const h2 = harness({ polls: [j(200, PAIRED)] }, { findRepo: () => null, interactive: true, prompt: async () => answer });
-    answer = h2.repo;
-    expect(await runPair([], h2.deps)).toBe(0);
-    expect(loadConfig(h2.cfgFile, h2.host).projects[0]!.repoPaths).toEqual([h2.repo]);
+  it('needs no project folder at all (zero-config), wherever it is run', async () => {
+    const h = harness({ polls: [j(200, PAIRED)] }, { cwd: tmp() });
+    expect(await runPair([], h.deps)).toBe(0);
+    expect(loadConfig(h.cfgFile, h.host).projects).toEqual([]);
+    expect(h.text()).not.toMatch(/--repo/);
+  });
+
+  it('on a headless machine (no display, or over SSH) the browser is not opened: the code and address are printed once', async () => {
+    for (const env of [{}, { DISPLAY: ':0', SSH_CONNECTION: '1.2.3.4 5 6.7.8.9 22' }]) {
+      const h = harness({ polls: [j(200, PAIRED)] }, { env });
+      expect(await runPair([], h.deps)).toBe(0);
+      expect(h.opener).not.toHaveBeenCalled();
+      expect(h.text()).toContain('BW-7KQ-4MD'); expect(h.text()).toContain('https://botwarren.com/pair');
+    }
   });
 
   it('re-pairing keeps the owner\'s projects, delay and ports, replaces ship and secret, and says the old secret stops working', async () => {

@@ -2,13 +2,17 @@
 /** `botwarren` CLI: run (build wrapper), status, ops, pause, resume, login. Talks only to the local ship agent. */
 import { readFileSync, existsSync } from 'node:fs';
 import { loadConfig, type ShipConfig } from './config.ts';
-import { dataPaths } from './paths.ts';
-import { ProjectAttributor } from './attribution.ts';
+import { currentHost, dataPaths } from './paths.ts';
+import { ProjectAttributor, gitRemote } from './attribution.ts';
+import { ProjectDiscovery, discoveryFile } from './discovery.ts';
 import { makePoster, runWrapped } from './runner.ts';
 import { hostname } from 'node:os';
 import { sha } from './events.ts';
 import { runLogin } from './login.ts';
-import { runPair } from './pair.ts';
+import { DISCONNECTED_NOTE, runPair } from './pair.ts';
+import { dirname, join } from 'node:path';
+import { runConnect } from './connect.ts';
+import { runUninstall } from './uninstall.ts';
 import { configPath } from './paths.ts';
 import { runAdapters } from './adapters/cli.ts';
 import { runUpdate, runVerifyRelease } from './update/cli.ts';
@@ -20,8 +24,11 @@ const USAGE = `botwarren - Botwarren ship agent CLI
   botwarren status                                             is the ship agent running? what is it publishing?
   botwarren ops [--show-token]                                 where your private local ops room is
   botwarren pause | resume                                     emergency stop / resume of public publishing
-  botwarren pair [--repo <folder>] [--no-open]                 connect this computer to your ship (shows a code, you approve it on botwarren.com)
-  botwarren login [--no-open]                                  sign in to botwarren.com as owner of your ship (e.g. to make it private)
+  botwarren connect [--no-open]                                connect this computer to your ship (the command on botwarren.com/get does this for you;
+                                                               without one it shows a short code and opens your browser)
+  botwarren uninstall [--yes] [--keep-config]                  remove the agent from this computer (and tell botwarren.com)
+  botwarren pair [--repo <folder>] [--no-open]                 same as connect without a claim command (older name; --repo adds a project folder by hand)
+  botwarren login [--no-open]                                  sign in to botwarren.com as owner of your ship (older installs; not needed with an account)
   botwarren adapters [explain|enable|disable <id>]             which tools Botwarren can see, and what each reads
   botwarren update [status|--dry-run|--version X]              check for / apply a signed update (automatic by default)
   botwarren --version                                          show the ship agent version
@@ -44,14 +51,20 @@ async function main(argv: string[]): Promise<number> {
   const [cmd, ...rest] = argv;
   const setUp = existsSync(process.env.BOTWARREN_SHIP_CONFIG ?? configPath());
   // first run: nothing is set up yet, so a bare `botwarren` in a terminal starts pairing instead of printing help
-  if (!cmd && !setUp && process.stdin.isTTY === true) { process.stdout.write('Welcome! This computer is not connected to a ship yet, so let\u2019s do that now.\n\n'); return runPair([]); }
+  if (!cmd && !setUp && process.stdin.isTTY === true) { process.stdout.write('Welcome! This computer is not connected to a ship yet, so let\u2019s do that now.\n\n'); return runConnect([]); }
   if (!cmd || cmd === '--help' || cmd === '-h' || cmd === 'help') { process.stdout.write(USAGE); return 0; }
   if (cmd === '--version' || cmd === '-v' || cmd === 'version') { process.stdout.write(`botwarren ship agent ${VERSION}\n`); return 0; }
   if (cmd === 'pair') return runPair(rest);
+  if (cmd === 'connect') return runConnect(rest);
+  if (cmd === 'uninstall') return runUninstall(rest);
   // these work before the ship is configured (installers call them first)
   if (cmd === 'verify-release') return runVerifyRelease(rest);
   if (cmd === 'update') return runUpdate(rest);
-  if (!setUp && ['run', 'status', 'ops', 'pause', 'resume', 'login'].includes(cmd)) { process.stderr.write('This computer is not connected to a ship yet. Run:  botwarren pair\n'); return 1; }
+  if (!setUp && ['run', 'status', 'ops', 'pause', 'resume', 'login'].includes(cmd)) {
+    const note = existsSync(join(dirname(process.env.BOTWARREN_SHIP_CONFIG ?? configPath()), DISCONNECTED_NOTE));
+    process.stderr.write(note ? 'This computer was disconnected from the website. Connect it again with a new command from https://botwarren.com/get (or run: botwarren connect).\n' : 'This computer is not connected to a ship yet. Get your command at https://botwarren.com/get (or run: botwarren connect).\n');
+    return 1;
+  }
   const cfg = loadConfig();
   switch (cmd) {
     case 'run': {
@@ -66,14 +79,16 @@ async function main(argv: string[]): Promise<number> {
         else if (flags[i] === '--project') project = flags[++i] ?? null;
         else { process.stderr.write(`unknown option ${flags[i]}\n`); return 2; }
       }
-      if (project && !cfg.projects.some((p) => p.id === project)) { process.stderr.write(`unknown project "${project}" (configured: ${cfg.projects.map((p) => p.id).join(', ')})\n`); return 2; }
-      project ??= (await new ProjectAttributor(cfg.projects).attribute(process.cwd())).projectId;
-      project ??= cfg.projects.length === 1 ? cfg.projects[0]!.id : null;
+      // hand-configured projects plus the ones noticed from sessions that the owner chose to show on the website
+      const known = [...cfg.projects, ...new ProjectDiscovery({ file: discoveryFile(cfg.dataDir), home: currentHost().home, gitRemote }).shown().map((d) => ({ id: d.id, repoPaths: [d.root] }))];
+      if (project && !known.some((p) => p.id === project)) { process.stderr.write(`unknown project "${project}" (known: ${known.map((p) => p.id).join(', ')})\n`); return 2; }
+      project ??= (await new ProjectAttributor(known).attribute(process.cwd())).projectId;
+      project ??= known.length === 1 ? known[0]!.id : null;
       const instance = sha(hostname()).slice(0, 12);
       const t = token(dataPaths(cfg.dataDir).ingestToken);
       if (!project || !t) {
         process.stderr.write(`[botwarren] ${!project ? 'cannot tell which project this belongs to (use --project <id>)' : 'ingest token missing'} - running without reporting\n`);
-        return runWrapped({ argv: command, release, projectId: project ?? cfg.projects[0]!.id, instance, post: async () => true });
+        return runWrapped({ argv: command, release, projectId: project ?? cfg.projects[0]?.id ?? cfg.shipId, instance, post: async () => true });
       }
       // let the child handle Ctrl-C; we still report its outcome afterwards
       const noop = () => {};
@@ -83,9 +98,17 @@ async function main(argv: string[]): Promise<number> {
     }
     case 'status': {
       try {
-        const s = (await api(cfg, 'GET', 'state')) as { killSwitch: boolean; delaySeconds: number; publicProjects: string[]; sessions: { status: string; projectId: string | null }[]; outbox: unknown[] };
+        const s = (await api(cfg, 'GET', 'state')) as { killSwitch: boolean; remotePaused?: boolean; delaySeconds: number; publicProjects: string[]; sessions: { status: string; projectId: string | null }[]; outbox: unknown[]; cloud?: { shipId?: string; site?: string; lastOkAt?: string | null; lastError?: string | null; unauthorized?: number; projectsNoticed?: number; projectsShown?: number; reportedAt?: string | null; tools?: { id: string; state: string }[] } };
         const live = s.sessions.filter((x) => x.status !== 'ended');
-        process.stdout.write(`Ship agent ${VERSION} running. Publishing ${s.killSwitch ? 'PAUSED (emergency stop on)' : 'on'}, delay ${s.delaySeconds}s.\nSessions seen: ${live.length} (published-eligible ${live.filter((x) => x.projectId).length}); waiting to publish: ${s.outbox.length}\n`);
+        const c = s.cloud;
+        const ago = (iso?: string | null) => { if (!iso) return 'never'; const sec = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000)); return sec < 90 ? `${sec}s ago` : `${Math.round(sec / 60)} min ago`; };
+        process.stdout.write(`Ship agent ${VERSION} running. Publishing ${s.killSwitch ? (s.remotePaused ? 'PAUSED from the website' : 'PAUSED (emergency stop on)') : 'on'}, delay ${s.delaySeconds}s.\nSessions seen: ${live.length} (published-eligible ${live.filter((x) => x.projectId).length}); waiting to publish: ${s.outbox.length}\n`);
+        if (c) {
+          const refused = (c.unauthorized ?? 0) > 0;
+          process.stdout.write(`Website: ${refused ? 'REFUSING this computer (it was disconnected or replaced; connect again at https://botwarren.com/get)' : c.lastOkAt ? `connected to ship "${c.shipId}", last answered ${ago(c.lastOkAt)}` : `not answered yet${c.lastError ? ` (${c.lastError})` : ''}`}.\n`);
+          process.stdout.write(`Projects: ${c.projectsShown ?? 0} shown, ${c.projectsNoticed ?? 0} noticed from your sessions (choose at https://botwarren.com/account).\n`);
+          if (c.tools?.length) process.stdout.write(`Tools: ${c.tools.map((t) => `${t.id} ${t.state}`).join(', ')}.\n`);
+        }
         return 0;
       } catch (e) { process.stderr.write(`Ship agent not reachable on 127.0.0.1:${cfg.opsPort}: ${(e as Error).message}\n`); return 1; }
     }

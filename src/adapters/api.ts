@@ -160,6 +160,8 @@ export interface AdapterContext {
   projects: ProjectRef[];
   /** Core attribution (git remote, then configured repo paths). Returns a configured project id or null. */
   attribute(cwd: string | null | undefined, nowMs: number): Promise<string | null>;
+  /** changes whenever the set of projects changes (the owner showed or hid one): attribute known sessions again */
+  attributionEpoch: () => number;
   /** Allowlisted, loopback-only, read-only HTTP for this adapter. Throws `PolicyError` for anything else. */
   http: LoopbackHttp;
   /** File access limited to the roots this adapter declared in its manifest. */

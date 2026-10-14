@@ -12,7 +12,7 @@
  * Re-running the command re-pairs: the website mints a new secret and the old one stops working.
  */
 import { spawn, execFile } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { z } from 'zod';
 import { configPath, currentHost, defaultSecretFile, type Host } from './paths.ts';
@@ -22,6 +22,8 @@ import { onboardingUntilIso } from './onboarding.ts';
 import { VERSION } from './version.ts';
 
 const SITE_DEFAULT = 'https://botwarren.com';
+/** written next to the config when the website revoked this computer; `botwarren status` explains it, connecting again removes it */
+export const DISCONNECTED_NOTE = 'disconnected.txt';
 const StartResponse = z.object({
   device_code: z.string().min(20).max(200),
   user_code: z.string().min(4).max(20).regex(/^[A-Z0-9-]+$/),
@@ -30,7 +32,7 @@ const StartResponse = z.object({
   interval: z.number().int().min(1).max(60).default(5),
   expires_in: z.number().int().min(30).max(3600).default(600),
 });
-const PairedResponse = z.object({
+export const PairedResponse = z.object({
   ship_id: z.string().regex(/^[a-z][a-z0-9-]{1,30}[a-z0-9]$/),
   ship_name: z.string().max(80).optional(),
   secret: z.string().min(16).max(200).regex(/^[A-Za-z0-9_-]+$/),
@@ -105,22 +107,18 @@ export function shipUrlOk(base: string, shipId: string, site: string): boolean {
   return b.protocol === 'https:' && b.hostname === `${shipId}.${apex}` && b.port === s.port;
 }
 
-function osName(host: Host): 'windows' | 'macos' | 'linux' | 'other' {
+/** Can a browser be opened for this person from here? Not over SSH, and not on a Linux machine with no display. */
+export function hasDesktop(host: Host, env: Record<string, string | undefined>): boolean {
+  if (env.SSH_CONNECTION || env.SSH_TTY) return false;
+  return host.platform !== 'linux' || Boolean(env.DISPLAY || env.WAYLAND_DISPLAY);
+}
+
+export function osName(host: Host): 'windows' | 'macos' | 'linux' | 'other' {
   return host.platform === 'win32' ? 'windows' : host.platform === 'darwin' ? 'macos' : host.platform === 'linux' ? 'linux' : 'other';
 }
 
-function defaultFindRepo(dir: string): string | null {
-  let d = resolve(dir);
-  for (let i = 0; i < 40; i++) {
-    if (existsSync(join(d, '.git'))) return d;
-    const up = dirname(d);
-    if (up === d) return null;
-    d = up;
-  }
-  return null;
-}
 
-const defaultRestrict = (path: string): Promise<void> => new Promise((done) => {
+export const defaultRestrict = (path: string): Promise<void> => new Promise((done) => {
   if (process.platform !== 'win32') return done();
   const user = process.env.USERNAME;
   if (!user) return done();
@@ -151,7 +149,7 @@ export const defaultStartAgent = (configFile: string): Promise<'restarted' | 'st
   } catch { return 'manual'; }
 })();
 
-const defaultAgentUp = async (port: number): Promise<boolean> => {
+export const defaultAgentUp = async (port: number): Promise<boolean> => {
   for (let i = 0; i < 20; i++) {
     try { const r = await fetch(`http://127.0.0.1:${port}/healthz`, { signal: AbortSignal.timeout(1500) }); if (r.ok) return true; } catch { /* not yet */ }
     await new Promise((r) => setTimeout(r, 750));
@@ -189,20 +187,10 @@ export async function runPair(argv: string[], deps: PairDeps = {}): Promise<numb
   const site = siteOrigin(flags.site, env, typeof existing?.replicaUrl === 'string' ? existing.replicaUrl : null);
   if (!site) { err('The site address must be https (http is only allowed for localhost).\n'); return 2; }
 
-  // projects: first run needs at least one folder; decide BEFORE asking the person to approve anything
-  let repos = flags.repos.map((r) => resolve(deps.cwd ?? process.cwd(), r));
+  // projects: none are needed. Since 0.6 the agent notices projects from your coding sessions and you choose on the website;
+  // --repo still adds a folder by hand (advanced / headless use).
+  const repos = flags.repos.map((r) => resolve(deps.cwd ?? process.cwd(), r));
   const projectsKnown = Array.isArray(existing?.projects) && (existing!.projects as unknown[]).length > 0;
-  let usedCwd = false;
-  if (!projectsKnown && repos.length === 0) {
-    const guess = (deps.findRepo ?? defaultFindRepo)(deps.cwd ?? process.cwd());
-    if (guess) { repos = [guess]; usedCwd = true; }
-    else if (deps.interactive ?? (process.stdin.isTTY === true)) {
-      const ask = deps.prompt ?? (async (q: string) => { const rl = (await import('node:readline/promises')).createInterface({ input: process.stdin, output: process.stdout }); try { return await rl.question(q); } finally { rl.close(); } });
-      const answer = (await ask('Folder of the git checkout you want on your ship (for example ~/code/my-game): ')).trim();
-      if (answer) repos = [resolve(deps.cwd ?? process.cwd(), answer.replace(/^~(?=$|[\\/])/, host.home))];
-    }
-    if (repos.length === 0) { err('Tell Botwarren which project folder to watch: run `botwarren pair --repo <folder>` (a git checkout). Only its name and size are ever used.\n'); return 2; }
-  }
   for (const r of repos) if (!existsSync(r) || !statSync(r).isDirectory()) { err(`Folder not found: ${r}\n`); return 2; }
 
   // ---- 1. start
@@ -223,7 +211,7 @@ export async function runPair(argv: string[], deps: PairDeps = {}): Promise<numb
   if (!page) { err('The server sent a pairing page that does not look safe (not on botwarren.com), so it was not used.\n'); return 1; }
   if (existing) out('This computer already has a ship config. Pairing again gives the ship a NEW secret: the old one stops working.\n\n');
   out(`Your pairing code is  ${start.user_code}\n\n  1. Open ${page}  (log in if asked)\n  2. Check the code matches, then press Approve.\n\nOnly approve if you just ran this command. The code works once and expires in ${Math.round(start.expires_in / 60)} minutes.\n`);
-  if (!flags.noOpen && complete) {
+  if (!flags.noOpen && complete && hasDesktop(host, env)) {
     const opened = await (deps.opener ?? systemOpener)(complete).catch(() => false);
     out(opened ? '\nOpening your browser for you...\n' : '\nCould not open a browser from here: open the page above on any device.\n');
   }
@@ -258,24 +246,49 @@ export async function runPair(argv: string[], deps: PairDeps = {}): Promise<numb
   }
   if (!paired) { err('Nobody approved the code in time. Run `botwarren pair` again for a new one.\n'); return 1; }
 
-  // ---- 4. save the secret, write the config, start publishing
+  return saveAndStart(paired, { cfgFile, existing, projectsKnown, repos, name: flags.name, noStart: flags.noStart, host, deps, now });
+}
+
+export interface SaveContext {
+  cfgFile: string;
+  existing: Record<string, unknown> | null;
+  projectsKnown: boolean;
+  repos: string[];
+  name: string | null;
+  noStart: boolean;
+  host: Host;
+  deps: PairDeps;
+  now: () => number;
+  /** shown after the connection when the secret came from a claim command (no re-pair warning) */
+  via?: 'claim' | 'code';
+}
+
+/**
+ * Step 4 of every way of connecting (device code or claim command): save the secret in the user-only file, write the config, start
+ * (or restart) the agent and say what happens next. The secret is never printed.
+ */
+export async function saveAndStart(paired: z.infer<typeof PairedResponse>, c: SaveContext): Promise<number> {
+  const out = c.deps.out ?? ((s: string) => { process.stdout.write(s); });
+  const err = c.deps.err ?? ((s: string) => { process.stderr.write(s); });
+  const { existing, cfgFile, host, now } = c;
   const secretFile = typeof existing?.secretFile === 'string' && existing.secretFile ? existing.secretFile : defaultSecretFile(host);
-  try { await writeSecretFile(secretFile, paired.secret, deps.restrictFile ?? defaultRestrict); }
-  catch (e) { err(`Could not save the ship secret to ${secretFile}: ${(e as Error).message}\nThis pairing is used up; run \`botwarren pair\` again once that is fixed.\n`); return 1; }
-  const projects = projectsKnown ? existing!.projects : [{ id: paired.ship_id, publicName: flags.name ?? defaultPublicName(paired.ship_id), repoPaths: repos }];
+  try { await writeSecretFile(secretFile, paired.secret, c.deps.restrictFile ?? defaultRestrict); }
+  catch (e) { err(`Could not save the ship secret to ${secretFile}: ${(e as Error).message}\nThis connection is used up; connect again once that is fixed.\n`); return 1; }
+  const projects = c.projectsKnown ? existing!.projects : c.repos.length > 0 ? [{ id: paired.ship_id, publicName: c.name ?? defaultPublicName(paired.ship_id), repoPaths: c.repos }] : [];
   const raw: Record<string, unknown> = { ...(existing ?? { opsPort: 4411, demo: false }), shipId: paired.ship_id, replicaUrl: paired.base_url, secretFile, delaySeconds: existing?.delaySeconds ?? 90, onboardingUntil: onboardingUntilIso(now()), projects };
   try { resolveConfig(raw, host); } catch (e) { err(`The new configuration was not valid, so it was not saved: ${(e as Error).message}\n`); return 1; }
   mkdirSync(dirname(cfgFile), { recursive: true, mode: 0o700 });
   writeFileSync(cfgFile, `${JSON.stringify(raw, null, 2)}\n`, { mode: 0o600 });
+  // a leftover "disconnected" note from an earlier revoke no longer applies
+  try { rmSync(join(dirname(cfgFile), DISCONNECTED_NOTE), { force: true }); } catch { /* ignore */ }
 
   const shipName = paired.ship_name ?? paired.ship_id;
   out(`\nConnected: this computer is now linked to ${shipName}.\n`);
-  if (usedCwd) out('Watching the project folder you ran this in. Only its name and size are used; change it in your config file any time.\n');
-  if (flags.noStart) { out('The agent was not started (--no-start). Start it, or restart its service, to begin publishing.\n'); return 0; }
-  const how = await (deps.startAgent ?? defaultStartAgent)(cfgFile).catch((): 'manual' => 'manual');
+  if (c.noStart) { out('The agent was not started (--no-start). Start it, or restart its service, to begin publishing.\n'); return 0; }
+  const how = await (c.deps.startAgent ?? defaultStartAgent)(cfgFile).catch((): 'manual' => 'manual');
   if (how === 'manual') { out('Could not start the agent automatically. Start the "Botwarren Ship Agent" service, or run the agent from the install folder.\n'); return 0; }
-  const up = await (deps.agentUp ?? defaultAgentUp)(typeof raw.opsPort === 'number' ? raw.opsPort : 4411);
+  const up = await (c.deps.agentUp ?? defaultAgentUp)(typeof raw.opsPort === 'number' ? raw.opsPort : 4411);
   out(up ? `The agent is running${how === 'restarted' ? ' (restarted with your new ship)' : ''}.\n` : 'The agent was started but has not answered yet; give it a few seconds.\n');
-  out(`\nOpen ${paired.base_url} to watch. Start a Claude Code or Codex session in your project: your first crew member appears in about 30 seconds (new ships publish with a 30 s delay for the first 15 minutes, then ${typeof raw.delaySeconds === 'number' ? raw.delaySeconds : 90} s).\nNothing from your prompts, code or files leaves this computer: only status codes do.\n`);
+  out(`\nOpen ${paired.base_url} to watch, or choose which projects it shows at botwarren.com/account. Start a Claude Code or Codex session: your first crew member appears in about 30 seconds (new ships publish with a 30 s delay for the first 15 minutes, then ${typeof raw.delaySeconds === 'number' ? raw.delaySeconds : 90} s).\nNothing from your prompts, code or files leaves this computer: only status codes do.\n`);
   return 0;
 }

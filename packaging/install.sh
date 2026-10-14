@@ -4,6 +4,13 @@
 #   curl -fsSL https://downloads.botwarren.com/install.sh | sh
 #   curl -fsSL https://downloads.botwarren.com/install.sh | sh -s -- --no-service
 #
+# ZERO-TOUCH (what botwarren.com/get gives you: one command with a single-use claim code for your ship):
+#   curl -fsSL https://downloads.botwarren.com/install.sh | BOTWARREN_CLAIM=bwc_xxxx sh
+# The code works once and expires after 30 minutes, so it is worthless if it stays in your shell history. It is passed to
+# `botwarren connect` only through that one process's environment: never as an argument, never written to a file, a service
+# definition or a log, and never printed. (The environment form does not show up in `ps`; `--claim <code>` also works but does.)
+# Without a code, a terminal install ends by starting the device-code flow (a short code and the browser).
+#
 # Source: https://github.com/turbokast/botwarren-ship  (apps/shipagent/packaging/install.sh)
 #
 # What it does:
@@ -34,10 +41,14 @@
 #   --bin-dir D       BOTWARREN_BIN_DIR      default ~/.local/bin
 #   --no-service      BOTWARREN_NO_SERVICE=1 do not register or start the background service
 #   --linger          --no-linger            Linux: keep the service running after logout (loginctl enable-linger)
+#   --claim CODE     BOTWARREN_CLAIM        single-use claim code from botwarren.com/get (prefer the environment variable)
+#   --no-connect      BOTWARREN_NO_CONNECT=1 install only; do not connect this computer to a ship
+#   --non-interactive BOTWARREN_NONINTERACTIVE=1  never start the device-code flow or ask questions (scripts, provisioning)
 #   --dry-run         BOTWARREN_DRY_RUN=1    print what would happen, change nothing
 #   --print-service[=KIND]                   print the service definition (systemd|launchd|autostart) and exit
 #   --help
-# Exit codes: 0 ok, 1 failed (nothing half-installed is left active), 2 bad usage.
+# Exit codes: 0 ok, 1 failed (nothing half-installed is left active), 2 bad usage, 4 installed, but the claim code could not be used
+# (it expired, was used already, or the network failed: the install stands; get a fresh command at botwarren.com/get).
 set -eu
 
 main() {
@@ -51,6 +62,13 @@ main() {
   [ "${BOTWARREN_NO_SERVICE:-0}" = 1 ] && WANT_SERVICE=0
   DRY_RUN="${BOTWARREN_DRY_RUN:-0}"
   LINGER=ask
+  # the claim code is read once and removed from the environment, so nothing else this script starts can see it
+  CLAIM="${BOTWARREN_CLAIM:-}"
+  unset BOTWARREN_CLAIM
+  WANT_CONNECT=1
+  INTERACTIVE=1
+  [ "${BOTWARREN_NONINTERACTIVE:-0}" = 1 ] && INTERACTIVE=0
+  [ "${BOTWARREN_NO_CONNECT:-0}" = 1 ] && WANT_CONNECT=0
   PRINT_SERVICE=0
   PRINT_KIND=
 
@@ -62,16 +80,30 @@ main() {
       --bin-dir) [ $# -ge 2 ] || usage_error "--bin-dir needs a value"; BIN_DIR=$2; shift ;;
       --checksum-only) CHECKSUM_ONLY=1 ;;
       --no-service) WANT_SERVICE=0 ;;
+      --claim) [ $# -ge 2 ] || usage_error "--claim needs a value"; CLAIM=$2; shift ;;
+      --no-connect) WANT_CONNECT=0 ;;
+      --non-interactive) INTERACTIVE=0 ;;
       --linger) LINGER=yes ;;
       --no-linger) LINGER=no ;;
       --dry-run) DRY_RUN=1 ;;
       --print-service) PRINT_SERVICE=1 ;;
       --print-service=*) PRINT_SERVICE=1; PRINT_KIND=${1#*=} ;;
-      -h|--help) sed -n '2,42p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
+      -h|--help) sed -n '2,51p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
       *) usage_error "unknown option: $1" ;;
     esac
     shift
   done
+
+  # check the claim code's shape BEFORE downloading anything, and never print it (not even in an error)
+  if [ -n "$CLAIM" ]; then
+    case "$CLAIM" in
+      bwc_*[!A-Za-z0-9_-]*|*[!A-Za-z0-9_-]*) die "that command looks cut off or changed (the claim code has odd characters). Copy it again from https://botwarren.com/get" ;;
+      bwc_*) ;;
+      *) die "that command looks cut off or changed (the claim code is not one of ours). Copy it again from https://botwarren.com/get" ;;
+    esac
+    CLAIM_LEN=${#CLAIM}
+    { [ "$CLAIM_LEN" -ge 24 ] && [ "$CLAIM_LEN" -le 84 ]; } || die "that command looks cut off (the claim code is the wrong length). Copy it again from https://botwarren.com/get"
+  fi
 
   BASE_URL=${BASE_URL%/}
   [ "$VERSION" = latest ] && VERSION=
@@ -123,6 +155,7 @@ main() {
   say "  service     : $SERVICE_KIND"
   say "  downloads   : $BASE_URL"
   if [ "$CHECKSUM_ONLY" = 1 ]; then say "  verification: SHA256SUMS over HTTPS only (no signed manifest); auto-update will be DISABLED"; else say "  verification: signed release manifest"; fi
+  if [ "$WANT_CONNECT" != 1 ]; then say "  connect     : no (--no-connect)"; elif [ -n "$CLAIM" ]; then say "  connect     : with your single-use claim code (not shown)"; else say "  connect     : device code (a terminal install only)"; fi
   if [ "$DRY_RUN" = 1 ]; then say "dry run: nothing was downloaded or changed."; return 0; fi
 
   TMP=$(mktemp -d "${TMPDIR:-/tmp}/botwarren-install.XXXXXX")
@@ -250,17 +283,61 @@ SH
   say "Botwarren $NEW_VERSION is installed."
   if [ "$CHECKSUM_ONLY" = 1 ]; then say "Auto-update is DISABLED for this install (no signed update manifest exists yet). Verified: SHA-256 over HTTPS. To update, run this installer again."; fi
   case ":$PATH:" in *":$BIN_DIR:"*) ;; *) say "Add $BIN_DIR to your PATH to use the 'botwarren' command, for example:"; say "    echo 'export PATH=\"$BIN_DIR:\$PATH\"' >> ~/.profile" ;; esac
-  if [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/botwarren-ship/config.json" ]; then
-    say "Your existing configuration was kept. The ship agent is running in the background."
-  else
-    say "Next: connect this computer to your ship:   $BIN_DIR/botwarren pair"
-    say "(the agent starts by itself as soon as the connection is set up)"
-  fi
-  say "Check updates and options: $BIN_DIR/botwarren update status    Tools it can see: $BIN_DIR/botwarren adapters"
-  say "Remove everything:        $ROOT/uninstall.sh   (add --keep-config to keep your settings)"
+  connect_step
+  say "Status: $BIN_DIR/botwarren status     Tools it can see: $BIN_DIR/botwarren adapters     Updates: $BIN_DIR/botwarren update status"
+  say "Everything else (projects, names, delay, pause, disconnect) is on https://botwarren.com/account"
+  say "Remove it:  botwarren uninstall   (or $ROOT/uninstall.sh; add --keep-config to keep your settings)"
+  return "$CONNECT_EXIT"
 }
 
 # ---------------------------------------------------------------------------- helpers
+# can a person see and answer us? stdout is a terminal, or a controlling terminal exists (curl | sh has a pipe on stdin)
+has_tty() {
+  [ "$INTERACTIVE" = 1 ] || return 1
+  [ -t 1 ] && return 0
+  ( : > /dev/tty ) 2>/dev/null
+}
+
+# Connects this computer to the ship, after the service is registered. The claim code travels ONLY in the environment of the one
+# `connect` process (and is then dropped); it is never an argument, a file, a service definition or output.
+connect_step() {
+  CONNECT_EXIT=0
+  CFG="${XDG_CONFIG_HOME:-$HOME/.config}/botwarren-ship/config.json"
+  if [ "$WANT_CONNECT" != 1 ]; then
+    say "Not connected (--no-connect). When you are ready, get your command at https://botwarren.com/get or run: $BIN_DIR/botwarren connect"
+    CLAIM=; return 0
+  fi
+  if [ -n "$CLAIM" ]; then
+    step "Connecting this computer to your ship"
+    RC=0
+    BOTWARREN_CLAIM="$CLAIM" "$BIN_DIR/botwarren" connect </dev/null || RC=$?
+    CLAIM=
+    case "$RC" in
+      0) say "Connected! Watch it appear at https://botwarren.com/get (or open your ship from https://botwarren.com/account)." ;;
+      3) say "This computer was already connected, so nothing changed." ;;
+      *) say "Botwarren is installed, but this computer could not be connected."
+         say "The claim code works once and expires after 30 minutes. If it expired, or the network was down, open https://botwarren.com/get for a fresh command."
+         CONNECT_EXIT=4 ;;
+    esac
+    return 0
+  fi
+  if [ -f "$CFG" ]; then
+    say "Your existing setup was kept. The ship agent keeps running in the background and updates itself."
+    return 0
+  fi
+  if has_tty; then
+    step "Connecting this computer to your ship (a short code, then your browser)"
+    RC=0
+    "$BIN_DIR/botwarren" connect </dev/null || RC=$?
+    case "$RC" in
+      0|3) ;;
+      *) say "Could not connect right now. Botwarren is installed; open https://botwarren.com/get to connect this computer, or run: $BIN_DIR/botwarren connect" ;;
+    esac
+  else
+    say "Open https://botwarren.com/get to connect this computer."
+  fi
+}
+
 say() { printf '%s\n' "$*"; }
 step() { printf '==> %s\n' "$*"; }
 die() { printf 'install: %s\n' "$*" >&2; exit 1; }

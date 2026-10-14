@@ -7,6 +7,7 @@
 # update state, logs) and, unless you keep them, your config + ship secret (%APPDATA%\Botwarren) and your local data
 # (%LOCALAPPDATA%\Botwarren\data: private journal, tokens). Public events already published stay on your public page until
 # you delete your ship on the website.
+# Safe to run twice (nothing left to remove is not an error). Never needs elevation. Prints exactly what it removed and what it left.
 # Source: https://github.com/turbokast/botwarren-ship (apps/shipagent/packaging/uninstall.ps1)
 [CmdletBinding()]
 param([switch]$Yes, [switch]$KeepConfig, [switch]$KeepData, [string]$FromTemp = '')
@@ -35,12 +36,16 @@ if (-not $FromTemp -and $self -and $self.StartsWith($Root, [StringComparison]::O
 }
 
 if (-not $Yes) {
+  if (-not [Environment]::UserInteractive) { Write-Host 'uninstall: not interactive; add -Yes to confirm' -ForegroundColor Red; exit 2 }
   $answer = Read-Host 'This removes Botwarren (and, unless you kept them, your config, ship secret and local data). Continue? [y/N]'
   if ($answer.Trim() -notmatch '^(y|yes)$') { Write-Host 'Cancelled.'; exit 1 }
 }
 
+$script:Removed = 0
+function Note([string]$What) { Write-Host "    removed $What"; $script:Removed++ }
+
 Write-Host '==> Stopping and removing the scheduled task'
-if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) { Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue; Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false }
+if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) { Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue; Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false; Note "scheduled task '$TaskName'" }
 Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
   Where-Object { $_.CommandLine -and $_.CommandLine -like "*$Root*" } |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
@@ -50,20 +55,21 @@ Write-Host '==> Removing the botwarren command from your PATH'
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 if ($userPath) {
   $kept = $userPath.Split(';', [StringSplitOptions]::RemoveEmptyEntries) | Where-Object { $_.TrimEnd('\') -ine $BinDir.TrimEnd('\') }
-  [Environment]::SetEnvironmentVariable('Path', ($kept -join ';'), 'User')
+  if (@($kept).Count -ne @($userPath.Split(';', [StringSplitOptions]::RemoveEmptyEntries)).Count) { [Environment]::SetEnvironmentVariable('Path', ($kept -join ';'), 'User'); Note "$BinDir from your user PATH" }
 }
 
 Write-Host '==> Removing program files'
 $keepData = $KeepData
 foreach ($n in @('runtime', 'runtime.new', 'runtime.old', 'launcher', 'versions', 'staging', 'state', 'logs', 'bin', 'app', 'current.json', 'uninstall.ps1')) {
   $p = Join-Path $Root $n
-  if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue }
+  if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue; Note $p }
 }
 if (-not $keepData -and (Test-Path -LiteralPath $DataDir)) {
   & icacls.exe $DataDir /grant "${env:USERNAME}:(OI)(CI)F" /T /C | Out-Null
-  Remove-Item -LiteralPath $DataDir -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $DataDir -Recurse -Force -ErrorAction SilentlyContinue; Note $DataDir
 } elseif ($keepData) { Write-Host "    kept local data: $DataDir" }
-if (-not $KeepConfig) { if (Test-Path -LiteralPath $CfgDir) { Remove-Item -LiteralPath $CfgDir -Recurse -Force -ErrorAction SilentlyContinue } } else { Write-Host "    kept config: $CfgDir" }
+if (-not $KeepConfig) { if (Test-Path -LiteralPath $CfgDir) { Remove-Item -LiteralPath $CfgDir -Recurse -Force -ErrorAction SilentlyContinue; Note $CfgDir } } else { Write-Host "    kept config (your ship secret stays on this computer): $CfgDir" }
 if ((Test-Path -LiteralPath $Root) -and -not (Get-ChildItem -LiteralPath $Root -Force -ErrorAction SilentlyContinue)) { Remove-Item -LiteralPath $Root -Force -ErrorAction SilentlyContinue }
-Write-Host 'Removed. Public events already published stay on your public page until you delete your ship on the website.'
+if ($script:Removed -eq 0) { Write-Host 'Nothing to remove: Botwarren was not installed here (or was already removed).' } else { Write-Host "Removed $($script:Removed) item(s)." }
+Write-Host 'Not touched: public events already published, which stay on your public page until you delete your ship on the website. To disconnect the computer from your ship, use "Disconnect this computer" on https://botwarren.com/account.'
 if ($FromTemp -and (Test-Path -LiteralPath $FromTemp)) { Remove-Item -LiteralPath $FromTemp -Force -ErrorAction SilentlyContinue }

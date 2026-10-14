@@ -65,7 +65,7 @@ export class ClaudeCodeAdapter implements Adapter {
     return env.hasCommand('claude') ? { found: true, confidence: 'medium', note: 'claude is installed but has no session logs yet' } : { found: false, confidence: 'high' };
   }
   async poll(ctx: AdapterContext, now: Date): Promise<Observation[]> {
-    this.scanner ??= new SessionScanner({ dirs: this.dirs, instance: ctx.instance, attributor: attributorFor(ctx) });
+    this.scanner ??= new SessionScanner({ dirs: this.dirs, instance: ctx.instance, attributor: attributorFor(ctx), epoch: ctx.attributionEpoch });
     return eventsToObservations(await this.scanner.tick(now), 'claude-code');
   }
 }
@@ -93,7 +93,7 @@ export class CodexAdapter implements Adapter {
     return env.hasCommand('codex') ? { found: true, confidence: 'medium', note: 'codex is installed but has no sessions yet' } : { found: false, confidence: 'high' };
   }
   async poll(ctx: AdapterContext, now: Date): Promise<Observation[]> {
-    this.scanner ??= new CodexScanner({ dirs: this.dirs, instance: ctx.instance, attributor: attributorFor(ctx) });
+    this.scanner ??= new CodexScanner({ dirs: this.dirs, instance: ctx.instance, attributor: attributorFor(ctx), epoch: ctx.attributionEpoch });
     return eventsToObservations(await this.scanner.tick(now, this.mains()), 'codex');
   }
 }

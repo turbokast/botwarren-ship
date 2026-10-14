@@ -62,12 +62,14 @@ export interface CodexOptions {
   reobserveMs?: number;
   discoverMs?: number;
   pairWindowMs?: number;
+  /** changes whenever the project list changes: sessions are attributed again at once */
+  epoch?: () => number;
   maxSessions?: number;
 }
 
 interface CTracked {
   key: string; path: string; mtimeMs: number; meta: CodexMeta | null; metaTries: number; execLike: boolean;
-  status: 'working' | 'idle' | null; projectId: string | null; role: Role; parentKey: string | undefined; lastEmit: number; attributed: boolean;
+  status: 'working' | 'idle' | null; projectId: string | null; emittedProject?: string | null; role: Role; parentKey: string | undefined; lastEmit: number; attributed: boolean;
 }
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -89,9 +91,10 @@ export class CodexScanner {
   /** files seen as too old (path -> mtime) so they are not re-read every discovery */
   private readonly stale = new Map<string, number>();
   private lastDiscover = -Infinity;
+  private seenEpoch = 0;
 
   constructor(opts: CodexOptions) {
-    this.o = { workingMs: 20_000, execEndedMs: 120_000, endedMs: 30 * 60_000, reobserveMs: 120_000, discoverMs: 10_000, pairWindowMs: 120_000, maxSessions: 100, ...opts };
+    this.o = { workingMs: 20_000, execEndedMs: 120_000, endedMs: 30 * 60_000, reobserveMs: 120_000, discoverMs: 10_000, pairWindowMs: 120_000, maxSessions: 100, epoch: () => 0, ...opts };
   }
   get trackedCount(): number { return this.tracked.size; }
 
@@ -121,6 +124,11 @@ export class CodexScanner {
     const nowMs = now.getTime();
     if (nowMs - this.lastDiscover >= this.o.discoverMs) { this.discover(now); this.lastDiscover = nowMs; }
     const out: CanonicalEventInput[] = [];
+    const ep = this.o.epoch();
+    if (ep !== this.seenEpoch) { // the project list changed: attribute the sessions we already know again now
+      this.seenEpoch = ep;
+      for (const t of this.tracked.values()) if (t.attributed) t.projectId = (await this.o.attributor.attribute(t.meta?.cwd ?? null, nowMs)).projectId;
+    }
     await Promise.all([...this.tracked.values()].map(async (t) => {
       let mtime: number;
       try { mtime = statSync(t.path).mtimeMs; } catch { mtime = -Infinity; }
@@ -156,7 +164,8 @@ export class CodexScanner {
         }
         if (best) { t.role = 'pair'; t.parentKey = best.key; roleChanged = true; }
       }
-      if (roleChanged || t.status !== status || t.lastEmit === 0 || nowMs - t.lastEmit >= this.o.reobserveMs) {
+      if (roleChanged || t.status !== status || t.lastEmit === 0 || t.emittedProject !== t.projectId || nowMs - t.lastEmit >= this.o.reobserveMs) {
+        t.emittedProject = t.projectId;
         t.status = status; t.lastEmit = nowMs;
         out.push(sessionObserved({
           instance: this.o.instance, key: t.key, status, projectId: t.projectId, at: now, harness: 'codex', role: t.role, model: 'gpt',
