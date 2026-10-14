@@ -59,7 +59,8 @@ describe('botwarren pair', () => {
     expect(normalize(cfg.secretFile)).toBe(normalize(h.secretFile));
     expect(cfg.projects).toEqual([{ id: 'demo1', publicName: 'DEMO1 Project', realName: null, repoPaths: [h.repo] }]);
     expect(cfg.onboardingUntil).toBe(h.now() + 15 * 60_000);
-    expect(h.startAgent).toHaveBeenCalledWith(h.cfgFile);
+    expect(h.startAgent).toHaveBeenCalledTimes(1);
+    expect(normalize(h.startAgent.mock.calls[0]![0])).toBe(normalize(h.cfgFile)); // same file, whatever the separator spelling on a Windows runner
     expect(h.text()).toMatch(/Connected: this computer is now linked to My Ship/);
     expect(h.text()).toMatch(/30 seconds/);
   });
