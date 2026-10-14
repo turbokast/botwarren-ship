@@ -78,7 +78,7 @@ describe('release signing', () => {
     const k = makeKey('dev-x', true);
     const kf = join(d, 'k.pem'); writeFileSync(kf, k.pem); chmodSync(kf, 0o644);
     const mf = join(d, 'm.json'); writeFileSync(mf, JSON.stringify(makeManifest({ stable: '0.5.0', releases: [{ version: '0.5.0' }] }).manifest));
-    expect((await run(['--key', kf, '--key-id', 'dev-x', mf])).out).toContain('readable by others');
+    if (process.platform !== 'win32') expect((await run(['--key', kf, '--key-id', 'dev-x', mf])).out).toContain('readable by others'); // POSIX permission bits only
     chmodSync(kf, 0o600);
     const ok = await run(['--key', kf, '--key-id', 'dev-x', mf]);
     expect(ok.status).toBe(0);

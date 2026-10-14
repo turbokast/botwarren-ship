@@ -49,7 +49,7 @@ describe('botwarren pair', () => {
     expect(h.calls.slice(1).every((c) => c.url === 'https://botwarren.com/api/pair/poll' && JSON.stringify(c.body) === JSON.stringify({ device_code: DEVICE }))).toBe(true);
     // the secret is in the user-only file and NOWHERE in the output
     expect(readFileSync(h.secretFile, 'utf8')).toBe(SECRET);
-    expect(statSync(h.secretFile).mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32') expect(statSync(h.secretFile).mode & 0o777).toBe(0o600); // Windows has no POSIX modes (the installer sets a user-only ACL)
     expect(h.text()).not.toContain(SECRET);
     // the config is valid for the agent, starts the short onboarding window and watches the folder it was run in
     const cfg = loadConfig(h.cfgFile, h.host);
