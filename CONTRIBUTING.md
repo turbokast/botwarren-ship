@@ -25,6 +25,8 @@ This adds a `Signed-off-by: Your Name <you@example.com>` line, which means you h
 
 ## Adding a tool (adapter)
 
+The full guide is [docs/ADAPTERS.md](docs/ADAPTERS.md); the short version:
+
 1. Implement `Adapter` (`src/adapters/api.ts`): `manifest` (declare every file and endpoint in `reads`: users see this text through `botwarren adapters explain <id>`), `detect` and `poll`.
 2. Register it in `src/adapters/registry.ts` (default `"auto"`: read only while the tool is detected).
 3. Add fixtures from the tool's documented formats. Mark `upstream.verification` as `documented` or `unverified` until you have recorded a live fixture, and note the tool version you recorded it with.
@@ -36,15 +38,23 @@ This adds a `Signed-off-by: Your Name <you@example.com>` line, which means you h
 
 ```sh
 pnpm install
+pnpm lint               # ESLint (typescript-eslint): real bugs only, no style rules
 pnpm typecheck          # strict TypeScript; no enums, no parameter properties (Node runs the sources directly)
 pnpm test               # vitest, one file at a time
+pnpm coverage           # the same tests with a V8 coverage report in coverage/
 shellcheck packaging/*.sh        # installers must stay shellcheck clean
 ```
 
-Requires Node.js 22.18 or newer. Run one test file at a time on a busy machine (`pnpm exec vitest run test/adapters/canary.test.ts`); some tests start real child processes and loopback sockets. Windows and macOS code paths are tested with injectable host objects (`Host` in `src/paths.ts`) because most development happens on Linux; changes to installers, services or signing need a manual run on the real operating system, noted in the pull request.
+Requires Node.js 22.18 or newer (`.nvmrc` says 24, which is what CI and the release use) and pnpm 11 (`corepack enable` picks the pinned version). Run one test file at a time on a busy machine (`pnpm exec vitest run test/adapters/canary.test.ts`); some tests start real child processes and loopback sockets. Windows and macOS code paths are tested with injectable host objects (`Host` in `src/paths.ts`) because most development happens on Linux; changes to installers, services or signing need a manual run on the real operating system, noted in the pull request.
 
 `src/vendor/core/` is a generated copy of the shared event schema and projection. Do not edit it in a pull request: changes to the public contract go through an issue first, because they change what the agent can publish.
 
 ## Pull requests
 
-Small, focused, with tests. State what the change reads, keeps and sends. Do not commit keys, tokens, `.env` files, databases or downloaded runtimes (the Node cache and `release-*.key` files are git-ignored; keep it that way). CI runs typecheck and tests on Linux, macOS and Windows; pull requests from forks run without any secrets.
+Small, focused, with tests. State what the change reads, keeps and sends, and add a line under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md) if a user would notice the change. Do not commit keys, tokens, `.env` files, databases or downloaded runtimes (the Node cache and `release-*.key` files are git-ignored; keep it that way). CI runs lint, typecheck and tests on Linux, macOS and Windows, a coverage report, CodeQL code scanning, a dependency review (known vulnerabilities, licence allow-list) and the DCO check; pull requests from forks run without any secrets. The first run from a new contributor needs the maintainer to approve it. Merges are squash merges, so you do not need to tidy your branch history, but every commit must be signed off.
+
+Workflow changes (`.github/workflows/`) are held to the same bar as code: actions pinned to a full commit SHA with the version in a comment, the narrowest `permissions:` per job, no secrets on `pull_request`. The `Workflow lint` job runs `actionlint` and `zizmor` on them.
+
+## Where to ask
+
+Questions and ideas: [Discussions](https://github.com/turbokast/botwarren-ship/discussions) (see [SUPPORT.md](SUPPORT.md)). How decisions are made: [GOVERNANCE.md](GOVERNANCE.md).

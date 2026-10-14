@@ -1,25 +1,36 @@
 version: 2
 updates:
   # Workflow actions are pinned to full commit SHAs; Dependabot keeps the SHAs (and the version comments) current.
+  # A 7 day cool-down means a freshly published release (which is where a compromised publish would be) is not proposed straight away.
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
     groups:
       actions:
         patterns: ['*']
+    labels: [dependencies, ci]
     commit-message:
       prefix: ci
     open-pull-requests-limit: 5
 
-  # The agent's own dependencies are few and pinned exactly; review every bump.
+  # The agent has one runtime dependency (zod), pinned exactly, and a handful of dev tools. Dev tools are grouped into one weekly
+  # pull request; a runtime dependency gets its own pull request so it is reviewed on its own. Dependabot security updates
+  # (Settings, Advanced Security) ignore the cool-down and the grouping and open a pull request as soon as an advisory exists.
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
     groups:
       dev-tooling:
         dependency-type: development
+    labels: [dependencies]
     commit-message:
       prefix: deps
     open-pull-requests-limit: 5

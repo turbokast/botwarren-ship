@@ -36,7 +36,7 @@ export async function dryRun(log = console.log) {
   const mock = await startMockKms({ privateKeyPem: pem, resource: RESOURCE });
   const env = { BOTWARREN_KMS_ENDPOINT: mock.url };
   const expectFail = async (label, p, re) => {
-    try { await p; } catch (e) { if (re.test(e.message)) { log(`  refused as expected: ${label}`); return; } throw new Error(`${label}: failed with the wrong error: ${e.message}`); }
+    try { await p; } catch (e) { if (re.test(e.message)) { log(`  refused as expected: ${label}`); return; } throw new Error(`${label}: failed with the wrong error: ${e.message}`, { cause: e }); }
     throw new Error(`${label}: was NOT refused`);
   };
   try {

@@ -61,7 +61,7 @@ export function makeDetectEnv(host: Host, settings: AdapterSettings, projects: P
 export function setAdapterEnabled(configFile: string, id: AdapterId, enabled: boolean | 'auto'): void {
   if (!ADAPTER_IDS.includes(id)) throw new Error(`unknown adapter "${id}" (known: ${ADAPTER_IDS.join(', ')})`);
   let raw: Record<string, unknown>;
-  try { raw = JSON.parse(readFileSync(configFile, 'utf8').replace(/^﻿/, '')) as Record<string, unknown>; } catch { throw new Error('could not read the config file'); }
+  try { raw = JSON.parse(readFileSync(configFile, 'utf8').replace(/^\uFEFF/, '')) as Record<string, unknown>; } catch { throw new Error('could not read the config file'); }
   const adapters = AdaptersConfigSchema.parse((raw.adapters as unknown) ?? {});
   adapters[id] = { ...(adapters[id] ?? {}), enabled };
   raw.adapters = adapters;

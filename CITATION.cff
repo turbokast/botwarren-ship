@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: If you use this software, please cite it as below.
+title: Botwarren ship agent
+type: software
+version: 0.5.0
+date-released: 2026-10-14
+license: Apache-2.0
+repository-code: https://github.com/turbokast/botwarren-ship
+url: https://botwarren.com
+abstract: >-
+  The Botwarren ship agent runs on your own computer and turns what your AI coding agents are doing into a small, delayed,
+  metadata-only status feed. It never reads or sends prompts, code, command output, file contents or file paths.
+keywords:
+  - ai-agents
+  - developer-tools
+  - observability
+  - privacy
+authors:
+  - name: TurboKast Ltd

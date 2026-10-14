@@ -254,8 +254,8 @@ describe.skipIf(!POWERSHELL)('install.ps1 with BOTWARREN_CHECKSUM_ONLY=1 (no sig
     expect(r.code, r.out).toBe(0);
     const root = rootOf(home);
     for (const f of ['runtime/node/node.exe', 'runtime/NODE_VERSION', 'launcher/launcher.mjs', 'versions/0.5.0/agent.mjs', 'versions/0.5.0/cli.mjs', 'versions/0.5.0/ops.html', 'current.json', 'uninstall.ps1', 'state/install-receipt.json', 'bin/botwarren.cmd']) expect(existsSync(join(root, f)), f).toBe(true);
-    expect(JSON.parse(readFileSync(join(root, 'current.json'), 'utf8').replace(/^﻿/, ''))).toMatchObject({ version: '0.5.0', state: 'stable', knownGood: '0.5.0' });
-    expect(JSON.parse(readFileSync(join(root, 'state', 'install-receipt.json'), 'utf8').replace(/^﻿/, ''))).toMatchObject({ method: 'standalone', verification: 'sha256sums', version: '0.5.0' });
+    expect(JSON.parse(readFileSync(join(root, 'current.json'), 'utf8').replace(/^\uFEFF/, ''))).toMatchObject({ version: '0.5.0', state: 'stable', knownGood: '0.5.0' });
+    expect(JSON.parse(readFileSync(join(root, 'state', 'install-receipt.json'), 'utf8').replace(/^\uFEFF/, ''))).toMatchObject({ method: 'standalone', verification: 'sha256sums', version: '0.5.0' });
     const cmd = readFileSync(join(root, 'bin', 'botwarren.cmd'), 'latin1');
     expect(cmd).toContain('\r\n'); // a .cmd file needs CRLF
     expect(cmd).toContain('launcher.mjs');
@@ -268,7 +268,7 @@ describe.skipIf(!POWERSHELL)('install.ps1 with BOTWARREN_CHECKSUM_ONLY=1 (no sig
     const home = newHome();
     const r = await ps(home, { BOTWARREN_CHECKSUM_ONLY: '1' });
     expect(r.code, r.out).toBe(0);
-    expect(JSON.parse(readFileSync(join(rootOf(home), 'current.json'), 'utf8').replace(/^﻿/, '')).version).toBe('0.5.1');
+    expect(JSON.parse(readFileSync(join(rootOf(home), 'current.json'), 'utf8').replace(/^\uFEFF/, '')).version).toBe('0.5.1');
     rmTmp(home);
   });
 
@@ -278,7 +278,7 @@ describe.skipIf(!POWERSHELL)('install.ps1 with BOTWARREN_CHECKSUM_ONLY=1 (no sig
     expect((await ps(home, { BOTWARREN_CHECKSUM_ONLY: '1', BOTWARREN_VERSION: '0.5.0' })).code).toBe(0);
     const r = await ps(home, { BOTWARREN_CHECKSUM_ONLY: '1', BOTWARREN_VERSION: '0.5.1' });
     expect(r.code, r.out).toBe(0);
-    expect(JSON.parse(readFileSync(join(rootOf(home), 'current.json'), 'utf8').replace(/^﻿/, ''))).toMatchObject({ version: '0.5.1', previous: '0.5.0', knownGood: '0.5.0', state: 'trial' });
+    expect(JSON.parse(readFileSync(join(rootOf(home), 'current.json'), 'utf8').replace(/^\uFEFF/, ''))).toMatchObject({ version: '0.5.1', previous: '0.5.0', knownGood: '0.5.0', state: 'trial' });
     expect(readdirSync(join(rootOf(home), 'versions')).sort()).toEqual(['0.5.0', '0.5.1']);
     rmTmp(home);
   });

@@ -1,21 +1,27 @@
 # Botwarren ship agent
 
 [![CI](https://github.com/turbokast/botwarren-ship/actions/workflows/ci.yml/badge.svg)](https://github.com/turbokast/botwarren-ship/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/turbokast/botwarren-ship/actions/workflows/codeql.yml/badge.svg)](https://github.com/turbokast/botwarren-ship/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/turbokast/botwarren-ship/badge)](https://scorecard.dev/viewer/?uri=github.com/turbokast/botwarren-ship)
+[![Release](https://img.shields.io/github/v/release/turbokast/botwarren-ship?include_prereleases&sort=semver)](https://github.com/turbokast/botwarren-ship/releases)
 [![Licence: Apache-2.0](https://img.shields.io/badge/licence-Apache--2.0-blue.svg)](LICENSE)
+<!-- Add the OpenSSF Best Practices badge after registering the project at https://www.bestpractices.dev (see docs/OPENSSF_BEST_PRACTICES.md):
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/<ID>/badge)](https://www.bestpractices.dev/projects/<ID>) -->
 
 The ship agent runs on your own computer and turns what your AI coding agents are doing (Claude Code, Codex, Herdr, Ninox, OpenCode, Gemini CLI, ...) into a small, delayed, **metadata-only** status feed for your [Botwarren](https://botwarren.com) ship: who is working, who is waiting for you, how full a context window is, whether a build passed. It never reads or sends your prompts, code, command output, file contents or file paths.
 
 This repository is the whole agent. The Botwarren website, hosted service and artwork are separate and not part of it. Everything the agent reads, keeps and sends is in this repository, so you can check it.
 
-> Status: pre-release (0.5.x). Pairing a computer with a ship is not in this version yet (see [Use](#use)). Releases are not yet signed for automatic updates: installs are checksum-verified and update by re-running the installer (see [Install](#install) and [Verify a release](#verify-a-release)).
+> Status: pre-release (0.5.x). Releases are built by a public workflow, attested with GitHub build provenance and described by an Ed25519-signed update manifest, which is what the installers and the automatic updater verify (see [Install](#install) and [Verify a release](#verify-a-release)). Windows files are not code-signed yet (see [Code signing policy](#code-signing-policy)).
 
-## What it reads and what it sends
+## What it reads and what it never reads
 
-**Reads (locally, read-only):** file names and timestamps, and a few numeric or enum fields, of the session logs and local APIs of the tools you use. Each adapter declares exactly what it reads; run `botwarren adapters explain <id>` to see it.
+| Reads (locally, read-only) | Never reads, never sends |
+|---|---|
+| File **names** and timestamps, and a few numeric or enum fields, of the session logs and local APIs of the AI tools you use. Each adapter declares exactly what it reads: `botwarren adapters explain <id>`. | Prompts, replies, code, diffs, command lines or their output, file contents |
+| Which repository folders **you** configured, to match a session to a project you approved | Folder or file paths, repository names (unless you opt in to publishing real project names), environment values, tokens |
 
-**Sends (only to the Botwarren service you configured, delayed 30 to 120 seconds):** enum-only events: a pseudonymous worker id, a state (`working`, `idle`, `waiting_for_human`, `left`), the tool family, a coarse context-fill bucket (`low`, `mid`, `high`, `full`), build and deploy states, a project that you approved, and coarsened timestamps. There is no free-text field in the event format.
-
-**Never sent:** prompts, replies, code, diffs, command lines or output, file contents, folder or file paths, repository names (unless you opt in to publishing real project names), environment values, tokens.
+**Sends** (only to the Botwarren service you configured, delayed 30 to 120 seconds): enum-only events: a pseudonymous worker id, a state (`working`, `idle`, `waiting_for_human`, `left`), the tool family, a coarse context-fill bucket (`low`, `mid`, `high`, `full`), build and deploy states, a project you approved, and coarsened timestamps. There is no free-text field in the event format. There is no telemetry, analytics or crash reporting.
 
 The full explanation, with the exact list of events and the checks that enforce it, is on the trust page: **<https://botwarren.com/trust.html>**. How it is enforced, in code you can read:
 
@@ -25,47 +31,69 @@ The full explanation, with the exact list of events and the checks that enforce 
 * **One-way boundary.** The public view is derived by an allow-listed projection (`projectPublic` in `src/vendor/core/projection.ts`). Nothing is "sanitised" afterwards, and the delay is not a privacy filter.
 * **Local only otherwise.** The private journal and a loopback-only "ops room" (a page on `127.0.0.1`, protected by a token) stay on your machine. `botwarren pause` stops all publishing at once.
 
+## How it fits together
+
+```mermaid
+flowchart LR
+  subgraph machine["Your computer"]
+    T["AI coding tools<br/>Claude Code, Codex, Herdr, ..."] -->|"local metadata, read-only"| A["Adapters<br/>allow-listed, enum-only"]
+    A --> J[("Private journal and ops room<br/>local only, 127.0.0.1")]
+    A --> P["One-way projection<br/>allow-listed fields"]
+    P --> O["Outbox<br/>30 to 120 s delay"]
+  end
+  O -->|"enum-only events, HTTPS"| S["Your Botwarren ship<br/>botwarren.com"]
+  D["downloads.botwarren.com<br/>release archives and signed manifest"] -->|"static files, HTTPS"| U["Updater<br/>checks the Ed25519 signature and SHA-256"]
+```
+
+More detail (adapter contract, packaging, the update trust chain): [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ## Install
 
-Releases are published on the [Releases page](https://github.com/turbokast/botwarren-ship/releases) and at `https://downloads.botwarren.com/`, with a `SHA256SUMS` file and GitHub build attestations (see [Verify a release](#verify-a-release)).
+Releases are published on the [Releases page](https://github.com/turbokast/botwarren-ship/releases) and at `https://downloads.botwarren.com/`, with a `SHA256SUMS` file and GitHub build attestations.
 
-The one-line installers are per user (no administrator rights). They download a pinned official Node.js runtime together with the agent, install under `~/.local/share/botwarren` or `%LOCALAPPDATA%\Botwarren`, add a `botwarren` command and register a per-user background service. They have two ways to decide that the download is the real one:
+The one-line installers are per user (no administrator rights). They download a pinned official Node.js runtime together with the agent, install under `~/.local/share/botwarren` or `%LOCALAPPDATA%\Botwarren`, add a `botwarren` command and register a per-user background service (systemd user service, launchd agent, or a per-user scheduled task). Read the script first if you like: both are in [`packaging/`](packaging/) (`install.sh --help` lists every option).
 
-| | Signed manifest (preferred) | Checksum only (what exists today) |
-|---|---|---|
-| How | The archive's hash must be in a release manifest signed with the Ed25519 release key that is compiled into the agent. | The archive's hash must match `https://downloads.botwarren.com/<version>/SHA256SUMS`, fetched over HTTPS. |
-| Needs | A published, signed manifest. The production release key exists; releases carry a manifest once signed mode is switched on ([docs/RELEASING.md](docs/RELEASING.md)). Release approval is currently by a single maintainer. | Nothing but the release. You ask for it explicitly. |
-| Protects against | A compromised download host or a man in the middle. | A corrupted or tampered download in transit (TLS) and mix-ups between files. **Not** a compromised download host: someone who controls it could change the archive and its checksum together. |
-| Auto-update | On, silent, signed, reversible. | **Disabled** for this install until a signed manifest exists. The updater never runs unsigned code. |
-
-Without `--checksum-only` the installers use the signed path, and if the release has no signed manifest they stop and tell you so; they never quietly fall back.
+**Linux and macOS**
 
 ```sh
-# macOS and Linux: signed manifest (stops with a clear message while no manifest is published)
+# signed manifest: the archive's hash must be in a release manifest signed with the release key compiled into the agent
 curl -fsSL https://downloads.botwarren.com/install.sh | sh
+```
 
+**Windows 10 and 11 (PowerShell)**
+
+```powershell
+irm https://downloads.botwarren.com/install.ps1 | iex
+```
+
+Then connect the computer to your ship: `botwarren pair` shows a code, you approve it on botwarren.com.
+
+The installers have two ways to decide that the download is the real one:
+
+| | Signed manifest (default) | Checksum only (opt-in) |
+|---|---|---|
+| How | The archive's hash must be in a release manifest signed with the Ed25519 release key that is compiled into the agent; the installer runs `botwarren verify-release` before anything is installed or started. | The archive's hash must match `https://downloads.botwarren.com/<version>/SHA256SUMS`, fetched over HTTPS. |
+| Protects against | A compromised download host or a man in the middle. | A corrupted or tampered download in transit (TLS) and mix-ups between files. **Not** a compromised download host: someone who controls it could change the archive and its checksum together. |
+| Auto-update | On, silent, signed, reversible. | Disabled for that install until a signed manifest is available (the updater never runs unsigned code). |
+
+```sh
 # macOS and Linux: checksum-verified, a version you name (or the newest from latest.txt if you leave out --version)
 curl -fsSL https://downloads.botwarren.com/install.sh | sh -s -- --checksum-only --version 0.5.0
 ```
 
 ```powershell
-# Windows 10 and 11: signed manifest
-irm https://downloads.botwarren.com/install.ps1 | iex
-
 # Windows: checksum-verified (options are environment variables so they also work under iex)
 $env:BOTWARREN_CHECKSUM_ONLY = '1'; $env:BOTWARREN_VERSION = '0.5.0'; irm https://downloads.botwarren.com/install.ps1 | iex
 ```
 
-Checksum mode in detail: it resolves the version (`--version X.Y.Z`, or the one line in `https://downloads.botwarren.com/latest.txt`), downloads `<version>/SHA256SUMS`, requires the archive for your system to be listed there, downloads the archive, compares its SHA-256, lists it and refuses unsafe paths, and only then installs. It prints that auto-update is disabled for the install and records `"verification": "sha256sums"` in the install receipt. `latest.txt` and `SHA256SUMS` are plain files with the same trust as the host, which is why the table above is honest about what this mode does not cover.
+Checksum mode in detail: it resolves the version (`--version X.Y.Z`, or the one line in `https://downloads.botwarren.com/latest.txt`), downloads `<version>/SHA256SUMS`, requires the archive for your system to be listed there, downloads the archive, compares its SHA-256, lists it and refuses unsafe paths, and only then installs. `latest.txt` and `SHA256SUMS` are plain files with the same trust as the host, which is why the table is honest about what this mode does not cover. Without `--checksum-only` the installers use the signed path, and if a release has no signed manifest they stop and tell you so; they never quietly fall back.
 
-**Trust trade-off, in one sentence:** the archive is verified over HTTPS against the published checksums; you can also verify it against the GitHub Release and its build-provenance attestation, which does not depend on the download host (see [Verify a release](#verify-a-release)). To do that before installing, fetch the archive and `SHA256SUMS` yourself, verify them there, and use the manual route below.
-
-Prefer to read first: both scripts are in [`packaging/`](packaging/) (`install.sh --help` lists every option).
+**Trust trade-off, in one sentence:** the archive is verified over HTTPS against the published checksums or the signed manifest; you can also verify it against the GitHub Release and its build-provenance attestation, which does not depend on the download host (see [Verify a release](#verify-a-release)). To do that before installing, fetch the archive and `SHA256SUMS` yourself, verify them there, and use the manual route below.
 
 ### Manual install of a release archive
 
 1. Download the archive for your system from the Releases page, plus `SHA256SUMS`.
-2. Verify it (next section).
+2. Verify it ([next section](#verify-a-release)).
 3. Unpack it into the install directory (the archive is exactly the installed layout) and start it:
 
 ```sh
@@ -87,29 +115,29 @@ botwarren adapters [explain <id>]    which tools it can see, and exactly what ea
 botwarren run -- <build command>     report a build or test run as CI activity (the command text is never sent)
 botwarren pause | resume             emergency stop and resume of publishing
 botwarren ops                        where your private local ops room is
+botwarren pair                       connect this computer to your ship (a code that you approve on botwarren.com)
 botwarren login                      sign in to botwarren.com as the owner of your ship
 botwarren update [status]            updates (see below)
-botwarren pair                       connect this computer to your ship   (not available yet)
 ```
 
-`botwarren pair` will connect a computer to a ship with a one-time code; it does not exist in 0.5.0. Today the ship configuration file and ship secret are created by hand (or by the installer): see [`src/config.ts`](src/config.ts) for the schema (`config.json` in `~/.config/botwarren-ship/` or `%APPDATA%\Botwarren\`). The secret is kept in a separate file that only you can read.
+`botwarren pair` connects a computer to a ship with a one-time code: no secret to copy. The ship secret is written to a separate file that only you can read and is never printed. The configuration file (`config.json` in `~/.config/botwarren-ship/` or `%APPDATA%\Botwarren\`) has its schema in [`src/config.ts`](src/config.ts).
 
 ### Tools it can see
 
 | Adapter | How | Notes |
 |---|---|---|
-| Claude Code | session log metadata | sub-agents, tool errors, steps, context fill |
-| Codex | rollout file headers | pairs with a Claude session of the same project |
-| Herdr | local socket, `agent.list` only | named sessions supported |
-| Ninox | `127.0.0.1` read-only API | macOS and Linux; merged with the Claude session it runs |
+| Claude Code | session log metadata | sub-agents, tool errors, steps, context fill. Verified against a live install |
+| Codex | rollout file headers | pairs with a Claude session of the same project. Verified against a live install |
+| Herdr | local socket, `agent.list` only | named sessions supported; Windows unverified |
+| Ninox | `127.0.0.1` read-only API | macOS and Linux; merged with the Claude session it runs. Unverified against a live install |
 | OpenCode | its local server | documented shapes; unverified against a live install |
 | Gemini CLI | file names only | unverified against a live install |
 
-Configure in `config.json`: `"adapters": { "ninox": { "enabled": true, "port": 8081 } }`. To add a tool, see [CONTRIBUTING.md](CONTRIBUTING.md).
+Configure in `config.json`: `"adapters": { "ninox": { "enabled": true, "port": 8081 } }`. To add a tool, see [docs/ADAPTERS.md](docs/ADAPTERS.md) and [CONTRIBUTING.md](CONTRIBUTING.md): every adapter needs a canary test scenario.
 
 ## Updates
 
-Automatic updates are designed to be silent, signed and reversible: a release is described by a manifest signed with an Ed25519 key whose public half is compiled into the agent; the agent refuses anything not listed in it with a matching SHA-256, refuses older manifests, and runs a new version on trial and rolls back if it is unhealthy. **Until a production release key exists no manifest is published, so the updater has nothing to fetch and stays inert, and an install made with `--checksum-only` is not updated automatically** (re-run the installer to move to a newer version; once signed manifests exist the same install starts receiving signed updates, because the agent verifies them itself). The only dev public key compiled in is refused unless you set `BOTWARREN_UPDATE_ALLOW_DEV_KEY=1`.
+Automatic updates are silent, signed and reversible. A release is described by a manifest signed with an Ed25519 key whose public half is compiled into the agent; the production key is a non-exportable Google Cloud KMS key that only the release workflow can use, and any two of three offline recovery keys can rotate or revoke it. The agent refuses anything not listed in the manifest with a matching SHA-256, refuses older manifests, and runs a new version on trial and rolls back if it is unhealthy. An install made with `--checksum-only` is not updated automatically (re-run the installer to move to a newer version); it starts receiving signed updates once you reinstall in signed mode. The development public key that is also compiled in is refused unless you set `BOTWARREN_UPDATE_ALLOW_DEV_KEY=1`.
 
 An update check is two static file downloads from `https://downloads.botwarren.com/` and sends only the HTTP request itself (with a `botwarren-agent/<version>` user agent). There is no telemetry. Turn it off: `BOTWARREN_DISABLE_AUTOUPDATE=1` (manual `botwarren update` still works), `BOTWARREN_DISABLE_UPDATES=1` (no update traffic at all), or `"updates": { "enabled": false }` in `config.json`. Installs made by a package manager never self-update.
 
@@ -122,6 +150,12 @@ sha256sum --check --ignore-missing SHA256SUMS          # macOS: shasum -a 256 -c
 gh attestation verify botwarren-<version>-linux-x64.tar.gz --repo turbokast/botwarren-ship
 ```
 
+```powershell
+# Windows: compare with the line for your file in SHA256SUMS
+Get-FileHash .\botwarren-<version>-win-x64.zip -Algorithm SHA256
+gh attestation verify .\botwarren-<version>-win-x64.zip --repo turbokast/botwarren-ship
+```
+
 The checksum list can come from `https://downloads.botwarren.com/<version>/SHA256SUMS` or from the GitHub Release; compare the two (they must be identical). Only the attestation is independent of the download host, so for a stricter check pin what it must say:
 
 ```sh
@@ -131,24 +165,37 @@ gh attestation verify botwarren-<version>-linux-x64.tar.gz --repo turbokast/botw
 gh attestation verify botwarren-<version>-linux-x64.tar.gz --repo turbokast/botwarren-ship --bundle attestations-<version>.sigstore.jsonl
 ```
 
-(Needs the GitHub CLI; the first form asks GitHub's API for the attestations of the file's SHA-256, so run `gh auth login` first. On Windows, `Get-FileHash <file> -Algorithm SHA256` gives the hash to compare with `SHA256SUMS`.)
+(Needs the GitHub CLI; the first form asks GitHub's API for the attestations of the file's SHA-256, so run `gh auth login` first.) You can also check a downloaded `manifest.json` and `manifest.json.sig` against the keys compiled into the agent with `botwarren verify-release --manifest manifest.json --sig manifest.json.sig`.
 
 The attestation proves the file was produced by that workflow in this repository at that commit. Reproducible builds (fixed timestamps, sorted entries) let you rebuild and compare hashes: see [Build from source](#build-from-source) and [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Build from source
 
-Requires Node.js 22.18 or newer and [pnpm](https://pnpm.io) 11.
+Requires Node.js 22.18 or newer (CI and releases use 24; `.nvmrc`) and [pnpm](https://pnpm.io) 11.
 
 ```sh
 pnpm install
+pnpm lint
 pnpm typecheck
 pnpm test
 node scripts/build-release.mjs --no-manifest                  # full archives (add --offline to use only the cached, hash-pinned Node runtimes)
 ```
 
-The release build downloads the pinned Node.js runtime once (checked against both nodejs.org's `SHASUMS256.txt` and the hash committed in `packaging/node-pins.json`) and caches it in `.cache/node`. Tests need no network. The architecture, the adapter contract, packaging and the update model are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The release build downloads the pinned Node.js runtime once (checked against both nodejs.org's `SHASUMS256.txt` and the hash committed in `packaging/node-pins.json`) and caches it in `.cache/node`. Tests need no network.
 
 `src/vendor/core/` holds the small, audited public contract (the event schema, the local reducer, and the one-way projection into the public schema), copied from the Botwarren core package at export time. It is part of this project and licensed like it.
+
+## Documentation
+
+| | |
+|---|---|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | data flow, the adapter contract, packaging, the signed update design |
+| [docs/ADAPTERS.md](docs/ADAPTERS.md) | how to write an adapter, and the canary rule |
+| [docs/RELEASING.md](docs/RELEASING.md) | how a release is made and verified; key custody and recovery |
+| [docs/REPO_SETTINGS.md](docs/REPO_SETTINGS.md) | the repository settings, the branch ruleset and what each protects |
+| [docs/OPENSSF_BEST_PRACTICES.md](docs/OPENSSF_BEST_PRACTICES.md) | the OpenSSF Best Practices questionnaire, answered with evidence |
+| [CHANGELOG.md](CHANGELOG.md) | what changed in each release |
+| [GOVERNANCE.md](GOVERNANCE.md), [MAINTAINERS.md](MAINTAINERS.md), [SUPPORT.md](SUPPORT.md) | who decides, who maintains, where to ask |
 
 ## Code signing policy
 
@@ -167,11 +214,11 @@ Every signing request is made by the release workflow from a tagged commit of th
 
 ## Security
 
-Report vulnerabilities to **support@turbokast.com** (see [SECURITY.md](SECURITY.md)). Please do not open public issues for them.
+Report vulnerabilities privately: use **Security, Report a vulnerability** on GitHub, or email **support@turbokast.com** (see [SECURITY.md](SECURITY.md)). Please do not open public issues for them. The repository is scanned with CodeQL, secret scanning with push protection and the OpenSSF Scorecard; [SECURITY.md](SECURITY.md) lists what is checked on every change.
 
 ## Contributing
 
-Contributions are welcome under the Apache-2.0 licence with a DCO sign-off: see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md).
+Contributions are welcome, and the bar is clear: the agent reads and sends metadata only. Good first steps: pick an [issue labelled `good first issue`](https://github.com/turbokast/botwarren-ship/labels/good%20first%20issue), request or write an [adapter for another tool](docs/ADAPTERS.md), or improve the docs. Contributions are accepted under the Apache-2.0 licence with a DCO sign-off (`git commit -s`): see [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md). Questions go to [Discussions](https://github.com/turbokast/botwarren-ship/discussions) ([SUPPORT.md](SUPPORT.md)).
 
 ## Licence
 

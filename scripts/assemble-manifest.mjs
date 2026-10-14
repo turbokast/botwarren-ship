@@ -26,7 +26,7 @@ const dir = opt('--dir'); const version = opt('--version'); const out = opt('--o
 if (!dir || !version || !out) fail('usage: --dir <build output> --version X.Y.Z --out <dir> [--previous <f> --previous-sig <f>] [--commit <sha>] [--epoch <n>] [--expires-days n] [--keep-releases n]');
 if (!/^\d{1,6}\.\d{1,6}\.\d{1,6}$/.test(version)) fail('--version must be x.y.z');
 
-const sums = new Map(readFileSync(join(dir, 'SHA256SUMS'), 'utf8').split('\n').filter(Boolean).map((l) => { const m = /^([0-9a-f]{64})  (.+)$/.exec(l); if (!m) fail(`bad SHA256SUMS line`); return [m[2], m[1]]; }));
+const sums = new Map(readFileSync(join(dir, 'SHA256SUMS'), 'utf8').split('\n').filter(Boolean).map((l) => { const m = /^([0-9a-f]{64}) {2}(.+)$/.exec(l); if (!m) fail(`bad SHA256SUMS line`); return [m[2], m[1]]; }));
 const artifact = (name) => {
   const p = join(dir, name);
   if (!existsSync(p)) fail(`${name} is missing from ${dir}`);

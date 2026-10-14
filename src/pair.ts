@@ -183,7 +183,7 @@ export async function runPair(argv: string[], deps: PairDeps = {}): Promise<numb
   const cfgFile = env.BOTWARREN_SHIP_CONFIG ?? configPath(host);
   let existing: Record<string, unknown> | null = null;
   if (existsSync(cfgFile)) {
-    try { existing = JSON.parse(readFileSync(cfgFile, 'utf8').replace(/^﻿/, '')) as Record<string, unknown>; }
+    try { existing = JSON.parse(readFileSync(cfgFile, 'utf8').replace(/^\uFEFF/, '')) as Record<string, unknown>; }
     catch { err(`The config file ${cfgFile} is not valid JSON, so it was left alone. Fix or delete it, then run \`botwarren pair\` again.\n`); return 1; }
   }
   const site = siteOrigin(flags.site, env, typeof existing?.replicaUrl === 'string' ? existing.replicaUrl : null);

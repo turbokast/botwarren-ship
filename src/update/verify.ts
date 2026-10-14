@@ -50,7 +50,7 @@ export function verifyManifest(bytes: Buffer, sigText: string, o: VerifyOptions)
   if (roleOf(key) !== 'release') return { ok: false, code: 'wrong_key_role' };
   if (key.dev && !o.allowDev) return { ok: false, code: 'dev_key_refused' };
   if (key.notAfter && Date.parse(key.notAfter) < o.now.getTime()) return { ok: false, code: 'key_expired' };
-  let valid = false;
+  let valid: boolean;
   try {
     const pub = createPublicKey({ key: Buffer.from(key.spki, 'base64'), format: 'der', type: 'spki' });
     valid = edVerify(null, Buffer.concat([SIGNATURE_DOMAIN, bytes]), pub, Buffer.from(sigFile.sig, 'base64'));

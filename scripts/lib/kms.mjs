@@ -85,7 +85,7 @@ export async function signManifestKms({ bytes, resource, keyId, pinned, token, e
   if (!key || key.dev || roleOf(key) !== 'release') throw new Error(`${keyId} is not a pinned, non-dev RELEASE key (src/update/keys.ts)`);
   if (bytes.length > MAX_SIGNABLE_MANIFEST_BYTES) throw new Error(`the manifest is ${bytes.length} bytes; the release key signs at most ${MAX_SIGNABLE_MANIFEST_BYTES} (Cloud KMS limit 64 KiB). Prune old releases (--keep-releases).`);
   let parsed;
-  try { parsed = Manifest.parse(JSON.parse(bytes.toString('utf8'))); } catch (e) { throw new Error(`the manifest does not match the schema the client enforces (${String(e.message).slice(0, 200)})`); }
+  try { parsed = Manifest.parse(JSON.parse(bytes.toString('utf8'))); } catch (e) { throw new Error(`the manifest does not match the schema the client enforces (${String(e.message).slice(0, 200)})`, { cause: e }); }
   const sig = await kmsSign({ resource, message: Buffer.concat([SIGNATURE_DOMAIN, bytes]), token, env });
   const sigText = JSON.stringify({ alg: 'ed25519', keyId, sig: sig.toString('base64') }) + '\n';
   const check = verifyManifest(bytes, sigText, { keys: [key], now: new Date(), highestSeen: 0, epoch: parsed.epoch });

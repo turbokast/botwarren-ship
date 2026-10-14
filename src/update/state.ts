@@ -53,7 +53,7 @@ export function writeJsonAtomic(file: string, value: unknown, mode = 0o600): voi
 }
 
 export function readJson(file: string): unknown {
-  try { return JSON.parse(readFileSync(file, 'utf8').replace(/^﻿/, '')); } catch { return null; }
+  try { return JSON.parse(readFileSync(file, 'utf8').replace(/^\uFEFF/, '')); } catch { return null; }
 }
 
 export function readPointer(root: string): Pointer | null {

@@ -6,7 +6,7 @@ The Botwarren ship agent runs on your computer next to your source code and cred
 
 Email **support@turbokast.com** with the subject `SECURITY: botwarren-ship`. Please include what you found, how to reproduce it, the agent version (`botwarren --version`) and your operating system. Do not open a public issue or pull request for a vulnerability, and do not include real secrets or customer data in your report.
 
-You may also use GitHub's private vulnerability reporting on this repository ("Security" tab, "Report a vulnerability") if it is enabled.
+You may also use GitHub's **private vulnerability reporting** on this repository ("Security" tab, "Report a vulnerability"): it is enabled, only the maintainer sees the report, and a fix can be prepared in a private fork before disclosure.
 
 ## Coordinated disclosure
 
@@ -35,4 +35,12 @@ Only the latest release is supported.
 
 ## Release integrity
 
-Every release archive is built by the release workflow in this repository, from a `v*` tag, in a protected GitHub environment that needs an approval, and carries a GitHub build attestation. `SHA256SUMS` lists the hashes. Automatic updates are described by an Ed25519-signed manifest whose public key is compiled into the agent; the key is held in Google Cloud KMS and can be used only by the release workflow, and until signed mode is switched on no manifest is published. Approval of a release is currently by a single maintainer (a deliberate pause, not two-person control). How to verify a release is in the [README](README.md#verify-a-release); the process is in [docs/RELEASING.md](docs/RELEASING.md).
+Every release archive is built by the release workflow in this repository, from a `v*` tag, in a protected GitHub environment that needs an approval, and carries a GitHub build attestation. `SHA256SUMS` lists the hashes. Automatic updates are described by an Ed25519-signed manifest whose public key is compiled into the agent; the key is held in Google Cloud KMS and can be used only by the release workflow. Releases since 0.5.0 are published with a signed manifest. Approval of a release is currently by a single maintainer (a deliberate pause, not two-person control). How to verify a release is in the [README](README.md#verify-a-release); the process is in [docs/RELEASING.md](docs/RELEASING.md).
+
+## How this repository is kept safe
+
+* **Automated checks on every change:** CodeQL code scanning (JavaScript, TypeScript and the GitHub Actions workflows), a dependency review on pull requests (known vulnerabilities and a licence allow-list), ESLint, strict TypeScript and tests on Linux, macOS and Windows, `zizmor` and `actionlint` for the workflows, and the OpenSSF Scorecard.
+* **Secret scanning with push protection** is on; Dependabot security updates and version updates are on.
+* **Workflows** use only actions pinned to a full commit SHA, the narrowest permissions per job, and give pull requests from forks no secret.
+* **`main` is protected** by a ruleset (pull requests, required checks, no force pushes, linear history), and `v*` tags cannot be moved or deleted. See [docs/REPO_SETTINGS.md](docs/REPO_SETTINGS.md) for the exact settings and their honest limits (the sole maintainer can bypass the ruleset).
+* **Vulnerability disclosure** is described above. Fixed vulnerabilities are published as GitHub security advisories.

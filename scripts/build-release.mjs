@@ -63,7 +63,6 @@ export async function bundleSources({ outDir }) {
   return files;
 }
 
-const mode = (n) => (n.endsWith('.sh') ? 0o755 : 0o644);
 
 function installLayout({ version, target, files, runtime, nodeVersion, installDir }) {
   const win = target.startsWith('win-');

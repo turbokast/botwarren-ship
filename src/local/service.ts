@@ -317,6 +317,7 @@ export class PrivateService {
   stop(): void { if (this.timer) clearInterval(this.timer); }
 
   server(): Server {
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- the whole handler body is inside try/catch (below), so it can not reject
     return createServer(async (req, res) => {
       try {
         // this service is loopback only. A page on another origin that rebinds its DNS name to 127.0.0.1 arrives with ITS host name.

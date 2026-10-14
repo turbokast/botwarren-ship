@@ -11,7 +11,7 @@ const ShipId = z.string().regex(/^[a-z][a-z0-9-]{1,30}[a-z0-9]$/);
 const ProjectConfig = z.object({
   id: ProjectId,
   /** Safe name shown publicly by default. Default "<SHIP> Project". */
-  publicName: z.string().trim().min(1).max(40).regex(/^[A-Za-z0-9][A-Za-z0-9 '&.\-]*$/, "letters, digits, spaces and ' & . - only (must start with a letter or digit)").optional(),
+  publicName: z.string().trim().min(1).max(40).regex(/^[A-Za-z0-9][A-Za-z0-9 '&.-]*$/, "letters, digits, spaces and ' & . - only (must start with a letter or digit)").optional(),
   /** Owner's real project name, published ONLY while "Show real project names" is on. Default: the repo folder name, prettified (see names.ts). */
   realName: z.string().trim().min(1).max(200).optional(),
   /** Local git checkouts. Attribution = session cwd inside one of these, or the same git remote. */
@@ -94,8 +94,8 @@ export function resolveConfig(raw: unknown, host: Host = currentHost()): ShipCon
 export function loadConfig(path: string = process.env.BOTWARREN_SHIP_CONFIG ?? configPath(), host: Host = currentHost()): ShipConfig {
   if (!existsSync(path)) throw new Error(`Botwarren ship config not found at ${path}. Run \`botwarren pair\` to connect this computer to your ship (see the README).`);
   let raw: unknown;
-  try { raw = JSON.parse(readFileSync(path, 'utf8').replace(/^﻿/, '')); } // PowerShell may write a BOM
-  catch (e) { throw new Error(`Config ${path} is not valid JSON: ${(e as Error).message}`); }
+  try { raw = JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, '')); } // PowerShell may write a BOM
+  catch (e) { throw new Error(`Config ${path} is not valid JSON: ${(e as Error).message}`, { cause: e }); }
   return resolveConfig(raw, host);
 }
 

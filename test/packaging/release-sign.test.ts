@@ -3,7 +3,7 @@
  * and the recovery keys-document commands (new, sign, combine) driven end to end through the real CLI.
  */
 import { generateKeyPairSync } from 'node:crypto';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';

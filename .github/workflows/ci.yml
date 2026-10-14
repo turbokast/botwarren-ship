@@ -1,12 +1,18 @@
 name: CI
 
-# Typecheck and tests on Linux, macOS and Windows.
+# Lint, typecheck, tests (Linux, macOS, Windows) and a coverage report.
 # Runs on pushes to main and on every pull request, INCLUDING pull requests from forks. It uses the `pull_request` event (never
-# `pull_request_target`), requests read-only permissions and references no secrets, so code from a fork never sees a credential.
+# `pull_request_target`), requests read-only permissions and gives pull requests no secret, so code from a fork never sees a credential.
+# The one optional secret (CODECOV_TOKEN) is used only by a step that runs on pushes to main, and only when the owner has turned
+# Codecov on (repository variable CODECOV_ENABLED=true).
+#
+# The job names below are the required status checks of the `protect-main` ruleset (docs/REPO_SETTINGS.md). Renaming a job means
+# updating the ruleset.
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -50,6 +56,85 @@ jobs:
       - name: Release signing dry run (sign-manifest with a MOCKED Cloud KMS; no credentials, no network)
         if: matrix.os == 'ubuntu-latest'
         run: node scripts/release-dry-run.mjs
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Strict TypeScript (pnpm typecheck, above) is the type gate. ESLint targets real bugs only (floating promises, misused
+      # promises, unused code); there are no style rules. See eslint.config.js.
+      - name: ESLint
+        run: pnpm lint
+
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test with V8 coverage
+        run: pnpm coverage
+
+      - name: Coverage summary
+        run: |
+          # shellcheck disable=SC2016
+          # (the JavaScript template literals are meant to stay literal for node)
+          node -e '
+            const s = JSON.parse(require("fs").readFileSync("coverage/coverage-summary.json", "utf8")).total;
+            const row = (n, m) => `| ${n} | ${m.pct}% | ${m.covered} / ${m.total} |`;
+            const out = ["### Test coverage (V8)", "", "| | Covered | Hits / total |", "|---|---|---|", row("Statements", s.statements), row("Branches", s.branches), row("Functions", s.functions), row("Lines", s.lines), "", "Informational: there is no coverage gate. The full lcov report is attached to this run as the `coverage` artifact.", ""].join("\n");
+            require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, out);
+          '
+
+      - name: Upload the coverage report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage
+          path: coverage/
+          if-no-files-found: error
+          retention-days: 14
+
+      # Optional. Codecov needs the owner to sign up and add the CODECOV_TOKEN secret; see docs/REPO_SETTINGS.md ("Owner actions").
+      # It never runs for pull requests, so no secret is ever reachable from a fork.
+      - name: Upload to Codecov (only when CODECOV_ENABLED is true; pushes to main only)
+        if: ${{ vars.CODECOV_ENABLED == 'true' && github.event_name == 'push' }}
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage/lcov.info
+          fail_ci_if_error: false
 
   shellcheck:
     name: shellcheck installers

@@ -1,5 +1,6 @@
 name: Support for another tool (adapter)
 description: Ask for, or propose, an adapter for an AI coding tool
+title: '[Adapter]: '
 labels: [adapter]
 body:
   - type: markdown

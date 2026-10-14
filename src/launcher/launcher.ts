@@ -53,7 +53,7 @@ const DEFAULTS = { confirmAfterMs: 60_000, healthTimeoutMs: 120_000, crashWindow
 
 function opsPortFromConfig(configFile: string | null): number {
   try {
-    const j = JSON.parse(readFileSync(configFile!, 'utf8').replace(/^﻿/, '')) as { opsPort?: unknown };
+    const j = JSON.parse(readFileSync(configFile!, 'utf8').replace(/^\uFEFF/, '')) as { opsPort?: unknown };
     return typeof j.opsPort === 'number' && j.opsPort >= 1024 && j.opsPort <= 65535 ? j.opsPort : 4411;
   } catch { return 4411; }
 }
@@ -75,7 +75,7 @@ export function httpHealth(url: string, timeoutMs = 2000): Promise<boolean> {
 export function pruneVersions(root: string, keep: (string | null)[]): string[] {
   const removed: string[] = [];
   const keepSet = new Set(keep.filter((x): x is string => !!x));
-  let names: string[] = [];
+  let names: string[];
   try { names = readdirSync(paths(root).versions); } catch { return removed; }
   for (const n of names) {
     if (keepSet.has(n) || !/^\d{1,6}\.\d{1,6}\.\d{1,6}$/.test(n)) continue;

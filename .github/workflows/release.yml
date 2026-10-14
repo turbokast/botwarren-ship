@@ -12,7 +12,7 @@ name: Release
 #   publish       runs in the PROTECTED `release` environment (required reviewer): nothing is attested, uploaded or released until a reviewer
 #                 approves. The R2 credentials exist only as secrets of that environment. It attests the artifacts (GitHub artifact attestations),
 #                 uploads them to Cloudflare R2 (the signed manifest LAST, when there is one) and creates the GitHub Release.
-#   sign-windows, notarize-macos   DISABLED stubs (`if: false`): see the notes on each job. They are not part of any release yet.
+#   sign-windows, notarize-macos   DISABLED stubs (guarded by repository variables that are not set): see the notes on each job. They are not part of any release yet.
 #
 # Two modes, chosen by the repository variable RELEASE_SIGNING (Settings, Secrets and variables, Variables):
 #   unset    CHECKSUM MODE: no manifest. The updater stays inert and the one-line installers install only on request, in their
@@ -90,6 +90,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false   # release jobs never use a build cache (cache poisoning)
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -97,8 +98,30 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      - name: Lint
+        run: pnpm lint
+
       - name: Test
         run: pnpm test
+
+      # The GitHub Release body is the reviewed CHANGELOG.md entry for this version. A missing, undated or empty entry fails the
+      # build, before anything is published.
+      - name: Extract the release notes from CHANGELOG.md
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/notes
+          node scripts/changelog-notes.mjs "${VERSION}" --out dist/notes/RELEASE_NOTES.md
+          { echo '### Release notes'; echo; cat dist/notes/RELEASE_NOTES.md; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the release notes
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-notes
+          path: dist/notes/RELEASE_NOTES.md
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Build the per-OS archives and the update bundle (no manifest here, the sign-manifest job describes these exact bytes)
         # The Node.js runtimes are downloaded from nodejs.org and must match both its SHASUMS256.txt and the hashes pinned in
@@ -142,6 +165,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false   # release jobs never use a build cache (cache poisoning)
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -191,6 +215,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false   # release jobs never use a build cache (cache poisoning)
 
       - name: Install the one runtime dependency (zod) only; no install scripts run
         run: pnpm install --frozen-lockfile --prod --ignore-scripts
@@ -200,6 +225,12 @@ jobs:
         with:
           name: release-files
           path: dist
+
+      - name: Download the release notes
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-notes
+          path: notes
 
       - name: Verify the downloaded files against SHA256SUMS
         working-directory: dist
@@ -383,7 +414,7 @@ jobs:
             cp signed/manifest.json signed/manifest.json.sig signed/install-index.txt dist/
             cp "${MANIFEST_ATTESTATION_BUNDLE}" "dist/attestations-manifest-${VERSION}.sigstore.jsonl"
           fi
-          flags=(--verify-tag --generate-notes --title "Botwarren ship agent ${VERSION}")
+          flags=(--verify-tag --notes-file notes/RELEASE_NOTES.md --title "Botwarren ship agent ${VERSION}")
           case "${VERSION}" in 0.*) flags+=(--prerelease) ;; esac
           gh release create "${TAG}" dist/* "${flags[@]}" --repo "${GITHUB_REPOSITORY}"
 
@@ -400,7 +431,7 @@ jobs:
   # SignPath requires the unsigned files to be uploaded as a GitHub artifact by this very workflow run.
   sign-windows:
     name: sign Windows files (SignPath) [DISABLED]
-    if: ${{ false }}
+    if: ${{ vars.ENABLE_SIGNPATH_STUB == 'true' }}   # disabled: the repository variable is deliberately not set (see the notes above)
     needs: build
     runs-on: ubuntu-latest
     environment:
@@ -408,7 +439,7 @@ jobs:
     permissions:
       contents: read
       actions: read          # SignPath reads the uploaded artifact
-      id-token: write
+      id-token: write        # SignPath verifies the run through GitHub OIDC
     steps:
       - name: Check out the tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -458,7 +489,7 @@ jobs:
   #   APPLE_NOTARY_KEY_ID, APPLE_NOTARY_ISSUER   the key id and the issuer id of that API key
   notarize-macos:
     name: sign and notarise macOS archives [DISABLED]
-    if: ${{ false }}
+    if: ${{ vars.ENABLE_NOTARIZE_STUB == 'true' }}   # disabled: the repository variable is deliberately not set (see the notes above)
     needs: build
     runs-on: macos-latest
     environment:
@@ -478,6 +509,7 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false   # release jobs never use a build cache (cache poisoning)
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
