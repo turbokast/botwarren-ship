@@ -1,7 +1,7 @@
 import { VERSION } from '../src/version.ts';
 import { describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { join, normalize } from 'node:path';
+import { join, normalize, posix } from 'node:path';
 import { parsePairFlags, runPair, shipUrlOk, siteOrigin, type PairDeps } from '../src/pair.ts';
 import { applyOnboardingDelay, ONBOARDING_DELAY_SECONDS } from '../src/onboarding.ts';
 import { loadConfig } from '../src/config.ts';
@@ -34,7 +34,8 @@ function harness(script: Script, over: Partial<PairDeps> = {}) {
   const startAgent = vi.fn(async (_c: string) => 'restarted' as const);
   const deps: PairDeps = { fetchImpl, opener, out: (s) => outs.push(s), err: (s) => errs.push(s), host, env: {}, cwd: repo, now: () => clock, sleep: async (ms) => { clock += ms; }, startAgent, agentUp: async () => true, restrictFile: async () => undefined, interactive: false, ...over };
   const text = () => outs.join('') + errs.join('');
-  return { deps, outs, errs, text, calls, opener, startAgent, root, repo, host, cfgFile: join(root, 'cfg', 'botwarren-ship', 'config.json'), secretFile: join(root, 'cfg', 'botwarren-ship', 'ship.secret'), now: () => clock };
+  return { deps, outs, errs, text, calls, opener, startAgent, root, repo, host, // the fake host is Linux on every runner, so the agent joins its paths POSIX-style: build the expectations the same way
+    cfgFile: posix.join(root, 'cfg', 'botwarren-ship', 'config.json'), secretFile: posix.join(root, 'cfg', 'botwarren-ship', 'ship.secret'), now: () => clock };
 }
 
 describe('botwarren pair', () => {
