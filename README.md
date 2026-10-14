@@ -5,8 +5,7 @@
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/turbokast/botwarren-ship/badge)](https://scorecard.dev/viewer/?uri=github.com/turbokast/botwarren-ship)
 [![Release](https://img.shields.io/github/v/release/turbokast/botwarren-ship?include_prereleases&sort=semver)](https://github.com/turbokast/botwarren-ship/releases)
 [![Licence: Apache-2.0](https://img.shields.io/badge/licence-Apache--2.0-blue.svg)](LICENSE)
-<!-- Add the OpenSSF Best Practices badge after registering the project at https://www.bestpractices.dev (see docs/OPENSSF_BEST_PRACTICES.md):
-[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/<ID>/badge)](https://www.bestpractices.dev/projects/<ID>) -->
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15500/badge)](https://www.bestpractices.dev/projects/15500)
 
 The ship agent runs on your own computer and turns what your AI coding agents are doing (Claude Code, Codex, Herdr, Ninox, OpenCode, Gemini CLI, ...) into a small, delayed, **metadata-only** status feed for your [Botwarren](https://botwarren.com) ship: who is working, who is waiting for you, how full a context window is, whether a build passed. It never reads or sends your prompts, code, command output, file contents or file paths.
 
