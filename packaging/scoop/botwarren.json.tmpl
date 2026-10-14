@@ -1,0 +1,31 @@
+{
+  "version": "@VERSION@",
+  "description": "Botwarren ship agent: shows your AI coding agents as a live crew (metadata only).",
+  "homepage": "https://github.com/turbokast/botwarren-ship",
+  "license": "@LICENSE@",
+  "notes": [
+    "TEMPLATE for a Scoop bucket (turbokast/scoop-bucket), NOT published. Rendered by scripts/render-package-templates.mjs.",
+    "Connect this computer to your ship:  botwarren pair",
+    "Package-manager installs never self-update (BOTWARREN_INSTALL_METHOD=scoop): use 'scoop update botwarren'.",
+    "UNVERIFIED: the env_set / bin behaviour has not been tested on a clean Windows machine."
+  ],
+  "architecture": {
+    "64bit": { "url": "@URL_WIN_X64@", "hash": "@SHA_WIN_X64@" },
+    "arm64": { "url": "@URL_WIN_ARM64@", "hash": "@SHA_WIN_ARM64@" }
+  },
+  "bin": "bin\\botwarren.cmd",
+  "env_set": {
+    "BOTWARREN_HOME": "$dir",
+    "BOTWARREN_INSTALL_METHOD": "scoop"
+  },
+  "checkver": {
+    "url": "https://downloads.botwarren.com/manifest.json",
+    "jsonpath": "$.channels.stable"
+  },
+  "autoupdate": {
+    "architecture": {
+      "64bit": { "url": "https://downloads.botwarren.com/botwarren-$version-win-x64.zip" },
+      "arm64": { "url": "https://downloads.botwarren.com/botwarren-$version-win-arm64.zip" }
+    }
+  }
+}

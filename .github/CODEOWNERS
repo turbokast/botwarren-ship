@@ -1,0 +1,15 @@
+# Everything needs a maintainer's review.
+*                       @Angry-Potato
+
+# The privacy boundary and everything that touches releases, signing or installation: maintainers only, always.
+/src/adapters/api.ts    @Angry-Potato
+/src/adapters/policy.ts @Angry-Potato
+/src/vendor/            @Angry-Potato
+/src/update/            @Angry-Potato
+/src/launcher/          @Angry-Potato
+/packaging/             @Angry-Potato
+/scripts/               @Angry-Potato
+/.github/               @Angry-Potato
+/SECURITY.md            @Angry-Potato
+/LICENSE                @Angry-Potato
+/NOTICE                 @Angry-Potato

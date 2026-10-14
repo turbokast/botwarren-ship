@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest an improvement
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The agent's contract is metadata only, read-only, no telemetry. Requests that need it to read or send content, or to contact anything other than the configured Botwarren service and the download host, will be declined.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like to happen?
+  - type: textarea
+    id: privacy
+    attributes:
+      label: What would it read, keep and send?
+      description: If it touches data on your machine, say what and where it ends up.

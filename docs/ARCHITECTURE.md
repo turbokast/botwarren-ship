@@ -1,0 +1,100 @@
+# Architecture
+
+How the ship agent is put together: the adapter contract, packaging, and the signed update design. For what the agent sends and why it is safe, start with the [README](../README.md) and <https://botwarren.com/trust.html>.
+
+Verification vocabulary: **live** = ran on a real machine against the real component; **fixture** = tested against documented formats or synthetic servers; **unverified** = written to the documentation but never run against the real thing.
+
+## 1. Data flow
+
+```
+adapters (read local tools, read-only)  ->  host (validates, merges, one crew member per session)
+   ->  local service on 127.0.0.1: canonical journal (private.db), ops room
+   ->  one-way projection (src/vendor/core/projection.ts): allow-listed, enum-only
+   ->  outbox with a 30-120 s delay  ->  public.db  ->  replicator  ->  the Botwarren service you configured
+```
+
+Only `public.db` is ever read by the replicator. The private journal (which may hold local folder names so the ops room can show you what is being published) never leaves the machine. The delay is not a privacy filter: classification happens first, the delay only gives you time to pause.
+
+Source map: `src/adapters/` (adapter API, host, one file per tool), `src/local/` (local service, stores, replicator), `src/readers/` (metadata readers for session logs, sub-agents, context fill and code size), `src/update/` (signed updates), `src/launcher/` (supervisor), `src/vendor/core/` (the public contract), `scripts/` (release build and signing), `packaging/` (installers, package-manager templates).
+
+## 2. Adapters
+
+An adapter turns what ONE tool exposes locally into a stream of `Observation`s. It implements `manifest`, `detect(env)`, `poll(ctx, now)` and optionally `start` and `stop`. Observation kinds: `session`, `session.ended`, `activity`, `adapter.health`. API version 1 is in `src/adapters/api.ts`.
+
+Privacy by construction (enforced by the host, not by adapter authors):
+
+| Rule | Enforcement | Test |
+|---|---|---|
+| Observations contain only enums, bounded integers, validated timestamps and safe keys. There is no free-text field. | Strict zod schemas; an unknown field drops the whole observation and is counted. Keys that do not look like ids become `h:<sha256[:24]>`. | `test/adapters/host.test.ts` |
+| Text that exists on the user's machine (cwd, a log file name) may appear only in `local`, which goes to the private journal and ops room and never into a public projection. | `Local` allows `cwd`, `log`, `pid` and two enums. | `test/adapters/canary.test.ts` |
+| Adapters get read-only, allow-listed access only. | `ctx.http` is GET-only, loopback only, exact path allow-list, no redirects, 2 MB cap; `ctx.fs` is limited to the roots the manifest declares, refuses symlinks, caps reads at 1 MiB; the Herdr client can only send `agent.list` and `ping`. | `policy.test.ts`, `herdr.test.ts`, `ninox.test.ts` |
+| Logs cannot carry user text. | `ctx.log(code, n?)` takes a fixed code and one integer; adapter failures are logged as an error code, never a message. | `host.test.ts`, `canary.test.ts` |
+| One crew member per real session. | The host merges observations sharing a correlation id or key; field authority is ordered per field. | `host.test.ts` |
+| Adapters cannot stall the agent. | Concurrent polls with a 15 s timeout, per-poll and session caps, background detection. | `host.test.ts` |
+
+**The canary suite** (`test/adapters/canary.test.ts`) is the gate every adapter must pass: a fixture plants a content canary in prompts, tool output, titles, summaries, notes, costs, repository names, environment values and extra fields, and a path canary in folder names. The content canary must appear nowhere (events, public projections through the real `projectPublic`, log lines); the path canary may appear only in `private.cwd`. A self-test proves the checker fails on a leaking adapter.
+
+| Adapter | Reads | Verification |
+|---|---|---|
+| `claude-code` | session log file names and mtimes, cwd of the newest lines, tool names, error flags, model family, numeric token counts (bucketed) | live |
+| `codex` | rollout file names and mtimes; only `id`, `cwd`, `originator`, `source` of the first line | live |
+| `herdr` | `agent.list` and `ping` on the Herdr socket; named sessions; sessions are never ended while Herdr is unreachable | fixture; Windows unverified |
+| `ninox` | `GET /api/v1/sessions` and the events stream (as a wake-up hint only) on `127.0.0.1`; the response shape is verified before the port is trusted | fixture; unverified against a live install |
+| `opencode` | `GET /session/status` and `GET /session` of its local server | fixture from documentation; unverified live |
+| `gemini-cli` | file names and write times only (no file content) | fixture from documentation; unverified live |
+
+Configuration: `"adapters": { "ninox": { "enabled": true, "port": 8081 } }`; `enabled` is `true`, `false` or `"auto"` (default except Claude Code and Codex: polled only while the tool is detected). Commands: `botwarren adapters`, `botwarren adapters explain <id>`, `botwarren adapters enable|disable|auto <id>`. To add an adapter, see [CONTRIBUTING.md](../CONTRIBUTING.md): an adapter without a canary scenario is not merged.
+
+## 3. Packaging
+
+A **pinned official Node.js runtime plus dependency-free `.mjs` bundles**, per user, no administrator rights, no native binary of our own. The pinned version and the SHA-256 of every runtime archive are committed in `packaging/node-pins.json`.
+
+Installed layout (identical inside every release archive):
+
+```
+<root>/                      Linux/macOS ~/.local/share/botwarren   Windows %LOCALAPPDATA%\Botwarren
+  runtime/node/node(.exe)    the official Node binary (+ LICENSE), runtime/NODE_VERSION
+  launcher/launcher.mjs      the supervisor (not replaced by silent updates)
+  versions/<v>/{agent.mjs,cli.mjs,ops.html,VERSION}   immutable, side by side
+  current.json               pointer {version, previous, knownGood, state trial|stable, bootCount}
+  state/  logs/  uninstall.sh|ps1   [bin/botwarren.cmd on Windows]
+```
+
+Config, secret and data stay in `~/.config/botwarren-ship` and `~/.local/share/botwarren-ship` (Windows `%APPDATA%\Botwarren`, `%LOCALAPPDATA%\Botwarren\data`).
+
+**Build** (`scripts/build-release.mjs`): targets `win-x64 win-arm64 mac-arm64 mac-x64 linux-x64 linux-arm64`. Runtime archives come from nodejs.org and must match both its `SHASUMS256.txt` and the committed pin; they are cached under `.cache/node`, re-verified on every use, and a failing cached file is deleted and fails the build. `--offline` works from the cache alone. Archives are written with fixed timestamps and sorted entries, so two builds of the same sources give identical hashes (tested). Bundles are scanned for obviously machine- or secret-specific text. Optional signing stages (Windows Authenticode, macOS Developer ID and notarisation) are in `scripts/lib/signing.mjs`; they run only when credentials are present and the host can run the tool, otherwise they skip and name the missing variables. Signing happens on the staged tree before hashing.
+
+**Installers** (`packaging/install.sh`, `packaging/install.ps1`): per user, never elevated; the whole script is wrapped so a partial download executes nothing; they check size and SHA-256, list the archive and refuse unsafe paths, then run the extracted CLI's `verify-release`, which requires a signed manifest that contains exactly this archive's hash, **before anything is installed or started**. Installs are side by side; an upgrade starts the new version on trial. Services: `systemd --user` (Linux), a launchd LaunchAgent (macOS, label `com.turbokast.botwarren`), a per-user Scheduled Task running the bundled `node.exe` directly (Windows, no `-ExecutionPolicy Bypass`). Unverified on real Windows hardware: console-window behaviour at logon and SmartScreen reactions for unsigned scripts. Uninstallers remove only what is clearly a Botwarren install.
+
+Homebrew and Scoop templates are in `packaging/` (not published yet). Their wrappers set `BOTWARREN_INSTALL_METHOD`, which turns the self-updater off.
+
+## 4. Signed updates
+
+The only thing that makes a download executable is a **signed manifest that lists it with a matching hash**. HTTPS is transport, not trust.
+
+| Piece | File | Role |
+|---|---|---|
+| Manifest and schema | `src/update/manifest.ts` | monotonic `manifestVersion`, `expires`, channels, `minSupported`, `blocked`, `rollbackFrom`, per release `bundle`, `full`, staged `rolloutBp` |
+| Signature | `src/update/verify.ts`, `keys.ts` | Ed25519 detached signature over the exact manifest bytes (domain-separated), keys pinned in the agent |
+| Decision | `src/update/decide.ts` | pure function: what to install, if anything |
+| Updater | `src/update/updater.ts` | check, verify, decide, download, sha256, extract to staging, self-test, write the pointer in trial |
+| Schedule | `src/update/service.ts` | at least 6 h plus jitter, backs off on failure, restarts into a staged version only when idle |
+| Policy | `src/update/policy.ts` | opt-outs, managed installs, machine policy |
+| Launcher | `src/launcher/` | start, trial, health check, rollback; dependency-free |
+
+| Threat | Mitigation |
+|---|---|
+| Hosting or DNS hijack, forged manifest | The signature is checked first against keys compiled into the client; nothing from an unsigned document is parsed |
+| Tampered artifact | sha256 and exact size checked before extraction |
+| Downgrade, rollback, freeze | The highest accepted `manifestVersion` is persisted; a lower release is refused unless the signed `rollbackFrom` lists it; `expires` bounds a freeze |
+| Bad release reaches everyone | `blocked`, `minSupported`, staged rollout, then trial with automatic rollback on the client |
+| Malicious archive | Entry names validated (no absolute, drive letters, `..`), regular files only, size caps, CRC checks |
+| Insecure transport | `https` only (`http` only for loopback), no credentials in URLs |
+| Dev key in production | Keys flagged `dev` are refused unless `BOTWARREN_UPDATE_ALLOW_DEV_KEY=1`; `build-release.mjs --release` refuses while one is pinned |
+| Updating a running file | Never: versions are side by side and the pointer swap is an atomic rename |
+
+**State today.** The only pinned key is a development key (its public half is in `src/update/keys.ts`; the private half is not in this repository). No production key exists yet, so releases are published **without a manifest** and the updater has nothing to apply. When the production key exists it is added to the pinned list (see [RELEASING.md](RELEASING.md)).
+
+**Launcher.** `current.json` is `{version, previous, knownGood, state, bootCount, trialStarted}`. A freshly staged version runs on **trial**: it is confirmed after the agent's loopback `/healthz` has answered continuously for 60 s, and rolled back automatically (the bad version is denylisted for 7 days) if the agent crashed 3 times within 10 minutes, booted twice without confirming, or is not healthy 120 s after start. Updates exit the agent with code 75 so the launcher restarts into the new version without a crash penalty.
+
+**Opt-outs.** `BOTWARREN_DISABLE_UPDATES=1` (no update traffic at all), `BOTWARREN_DISABLE_AUTOUPDATE=1` (no background checks), `"updates": {"enabled": false}`, `CI=true`, or a machine policy file (`/etc/botwarren/policy.json`, `%ProgramData%\Botwarren\policy.json`) that overrides user config. `BOTWARREN_UPDATE_URL` points at a mirror (same signature chain). Package-manager installs never self-update.

@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Botwarren Ops — PRIVATE</title>
+<style>
+  :root { --bg:#120e16; --panel:#1c1622; --panel2:#241c2c; --line:#3a2f45; --ink:#efe6f5; --dim:#a597b3; --red:#e5534b; --amber:#e0a33a; --green:#46b37a; --blue:#4c95e6; --font: 'Atkinson Hyperlegible', system-ui, sans-serif; --mono: ui-monospace, 'JetBrains Mono', monospace; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 var(--font); }
+  header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; border-bottom: 2px solid var(--red); background: linear-gradient(90deg, #2a0f14, var(--bg) 40%); position: sticky; top: 0; z-index: 5; }
+  .private { background: var(--red); color: #fff; font-weight: 800; letter-spacing: .12em; padding: 4px 10px; border-radius: 6px; font-size: 12px; }
+  h1 { font-size: 18px; margin: 0; } h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .1em; color: var(--dim); margin: 0 0 10px; }
+  .grow { flex: 1; }
+  .kpis { display: flex; gap: 10px; flex-wrap: wrap; }
+  .kpi { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-family: var(--mono); font-size: 12px; }
+  main { display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; padding: 16px 20px 40px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; overflow: auto; max-height: 460px; }
+  .c12 { grid-column: span 12; } .c8 { grid-column: span 8; } .c6 { grid-column: span 6; } .c4 { grid-column: span 4; }
+  @media (max-width: 1100px) { .c8, .c6, .c4 { grid-column: span 12; } }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th { text-align: left; color: var(--dim); font-weight: 600; border-bottom: 1px solid var(--line); padding: 4px 6px; position: sticky; top: -14px; background: var(--panel); }
+  td { border-bottom: 1px solid #2a2232; padding: 4px 6px; vertical-align: top; }
+  td.mono, .mono { font-family: var(--mono); font-size: 11.5px; }
+  .s-working,.s-running,.s-healthy { color: var(--blue); } .s-success,.s-production_verified,.s-parity_verified,.s-deployed { color: var(--green); }
+  .s-failed,.s-disconnected { color: var(--red); } .s-blocked,.s-delayed,.s-manual,.s-pending { color: var(--amber); } .s-ended,.s-idle,.s-done { color: var(--dim); }
+  .kill { border: 2px solid var(--red); border-radius: 10px; padding: 10px 14px; display: flex; gap: 12px; align-items: center; }
+  button { font: inherit; border-radius: 8px; border: 1px solid var(--line); background: var(--panel2); color: var(--ink); padding: 8px 14px; cursor: pointer; }
+  button.danger { background: var(--red); border-color: var(--red); color: #fff; font-weight: 700; }
+  button.ok { background: var(--green); border-color: var(--green); color: #08140d; font-weight: 700; }
+  .count { font-family: var(--mono); background: var(--panel2); border-radius: 999px; padding: 1px 8px; margin-left: 6px; }
+  .bar { height: 6px; background: #2a2232; border-radius: 3px; overflow: hidden; min-width: 80px; } .bar > i { display: block; height: 100%; background: var(--amber); }
+  .note { color: var(--dim); font-size: 12px; }
+  .err { color: var(--red); }
+  /* tooltips: one element, built by the generated script below; same look as the public site in the ops palette */
+  .bw-tip { display:none; position:fixed; inset:auto; left:0; top:0; margin:0; z-index:2147483000; width:max-content; max-width:min(260px, calc(100vw - 16px)); padding:8px 11px 9px; overflow:visible; background:var(--panel); color:var(--ink); border:1px solid #3ee6ff; box-shadow:0 0 0 1px #0a070d, 0 6px 18px rgba(0,0,0,.6); font:600 13.5px/1.35 var(--font); text-align:left; white-space:normal; overflow-wrap:break-word; pointer-events:none; }
+  .bw-tip::before { content:''; position:absolute; left:-2px; top:-2px; width:8px; height:8px; border-top:2px solid #3ee6ff; border-left:2px solid #3ee6ff; }
+  .bw-tip[data-open] { display:block; }
+  @media (prefers-reduced-motion: no-preference) { .bw-tip[data-open] { animation: bw-tip-in .12s linear; } }
+  @keyframes bw-tip-in { from { opacity:0; } to { opacity:1; } }
+  [data-tip] { -webkit-touch-callout:none; }
+</style>
+</head>
+<body>
+<header>
+  <span class="private" tabindex="0" data-tip-k="badge">PRIVATE</span>
+  <h1>Botwarren operations room</h1>
+  <div class="kpis" id="kpis"></div>
+  <span class="grow"></span>
+  <div class="kill" id="kill"></div>
+</header>
+<main>
+  <section class="c8"><h2 data-tip-k="h_sessions">Agent sessions (authorised provenance)</h2><table id="sessions"></table></section>
+  <section class="c4"><h2 data-tip-k="h_feeds">Feeds</h2><table id="feeds"></table><h2 style="margin-top:16px" data-tip-k="h_publication">Publication</h2><div id="pubctl"></div></section>
+  <section class="c6"><h2 data-tip-k="h_queue">Publication queue — exact public payloads <span class="count" id="qcount"></span></h2><table id="outbox"></table></section>
+  <section class="c6"><h2 data-tip-k="h_pipes">Pipelines &amp; deployments</h2><table id="pipes"></table></section>
+  <section class="c6"><h2 data-tip-k="h_quarantine">Quarantine <span class="count" id="qq"></span></h2><table id="quarantine"></table></section>
+  <section class="c6"><h2 data-tip-k="h_audit">Audit log</h2><table id="audit"></table></section>
+  <section class="c12"><h2 data-tip-k="h_recent">Recent canonical events (private)</h2><table id="recent"></table></section>
+</main>
+<!-- bw-tips:begin -->
+<script>
+(function () {
+const BW_OPS_TIPS = {
+ "badge": "This whole page is private to you. Nothing here is public.",
+ "kpi_journal": "Events recorded in the private journal since it started.",
+ "kpi_sessions": "Agent sessions that have not ended.",
+ "kpi_queued": "Public events waiting out their delay before they are published.",
+ "kpi_delay": "How long events wait before they are published.",
+ "kpi_mode": "Live: real activity. DEMO: synthetic activity for previews.",
+ "stop": "Stop ALL public publication immediately. Asks you to confirm first.",
+ "resume": "Start publishing to the public site again. Asks you to confirm first.",
+ "killOn": "Public publication is stopped. Nothing new reaches the public site.",
+ "killOff": "Public publication is running normally.",
+ "h_sessions": "Every agent session seen on this workstation. Private; never published as shown.",
+ "h_feeds": "The collectors that watch agents and pipelines, and whether each is healthy.",
+ "h_publication": "Controls for what reaches the public site.",
+ "h_queue": "Exactly what will be published, held until its delay ends.",
+ "h_pipes": "CI pipelines and deployments we know about.",
+ "h_quarantine": "Events held back because they failed a safety rule. They are never published.",
+ "h_audit": "A record of changes made from this page.",
+ "h_recent": "The latest raw events from the journal. Private.",
+ "delay": "Seconds between something happening and it being published, 30 to 120. A delay is not a privacy filter: details are removed first.",
+ "purge": "Delete all published events and clear the queue. Copies viewers, caches or recordings already have cannot be recalled.",
+ "th_project": "The project this session was matched to.",
+ "th_harness": "Which agent tool: claude, codex and so on.",
+ "th_status": "What the session is doing now.",
+ "th_seen": "Seconds since the last signal from the session.",
+ "th_attribution": "How sure we are about the project match: observed, inferred or unknown.",
+ "th_pane": "The terminal pane the session runs in.",
+ "th_cwd": "The working folder of the session. Private; never published.",
+ "th_title": "The window title of the session. Private; never published.",
+ "th_feed": "The collector name.",
+ "th_health": "Whether the collector is delivering.",
+ "th_last": "Time since the collector last reported.",
+ "th_releases": "Time left before this event is published.",
+ "th_kind": "The kind of event.",
+ "th_payload": "The exact data that will be published.",
+ "th_provider": "The CI provider.",
+ "th_purpose": "What the pipeline is for.",
+ "th_updated": "How long ago the provider last reported a change.",
+ "th_jobs": "Number of jobs in the pipeline.",
+ "th_at": "How long ago.",
+ "th_reason": "The safety rule that held the event back.",
+ "th_detail": "More detail about it.",
+ "th_actor": "Who made the change.",
+ "th_action": "What was changed.",
+ "th_occurred": "When it happened.",
+ "th_source": "Which collector reported it.",
+ "th_type": "The event type.",
+ "th_private": "The private details of the event. Never published as shown."
+};
+/**
+ * Tooltip placement: pure geometry, no DOM. The tip goes on the preferred side of the trigger with a gap, flips to the
+ * opposite side (then right, then left) when it does not fit, is centred on the trigger and then slid along the edge to
+ * stay inside the viewport. It never overlaps the trigger unless the window is too small for any side.
+ */
+
+const TIP_GAP = 8;
+const TIP_MARGIN = 8;
+
+const OPPOSITE                     = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' };
+
+/** the side a tip prefers: below a control in the upper half of the viewport, above one in the lower half */
+function preferredSide(trigger      , vp      )       {
+  return (trigger.top + trigger.bottom) / 2 > vp.h / 2 ? 'top' : 'bottom';
+}
+
+function room(side      , t      , vp      , gap        , margin        )         {
+  switch (side) {
+    case 'bottom': return vp.h - margin - t.bottom - gap;
+    case 'top': return t.top - gap - margin;
+    case 'right': return vp.w - margin - t.right - gap;
+    case 'left': return t.left - gap - margin;
+  }
+}
+
+const clamp = (v        , lo        , hi        )         => Math.max(lo, Math.min(hi, v));
+
+function placeTip(trigger      , tip      , vp      , prefer       , gap = TIP_GAP, margin = TIP_MARGIN)            {
+  const first = prefer ?? preferredSide(trigger, vp);
+  const order         = first === 'top' || first === 'bottom' ? [first, OPPOSITE[first], 'right', 'left'] : [first, OPPOSITE[first], 'bottom', 'top'];
+  const need = (s      )         => (s === 'top' || s === 'bottom' ? tip.h : tip.w);
+  let side = order.find((s) => room(s, trigger, vp, gap, margin) >= need(s));
+  // nothing fits: the side with the most room (the tip may then overlap in a tiny window)
+  side ??= order.reduce((best, s) => (room(s, trigger, vp, gap, margin) > room(best, trigger, vp, gap, margin) ? s : best), order[0] );
+  const cx = (trigger.left + trigger.right) / 2, cy = (trigger.top + trigger.bottom) / 2;
+  let x        , y        ;
+  if (side === 'top' || side === 'bottom') {
+    x = clamp(cx - tip.w / 2, margin, Math.max(margin, vp.w - margin - tip.w));
+    y = side === 'bottom' ? trigger.bottom + gap : trigger.top - gap - tip.h;
+  } else {
+    y = clamp(cy - tip.h / 2, margin, Math.max(margin, vp.h - margin - tip.h));
+    x = side === 'right' ? trigger.right + gap : trigger.left - gap - tip.w;
+  }
+  return { x: Math.round(x), y: Math.round(y), side };
+}
+
+/**
+ * The tooltip engine: framework-free, one delegated set of listeners on the document, ONE tooltip element.
+ *
+ * A control opts in with `data-tip="text"` (optionally `data-tip-side="top|bottom|left|right"`). Nothing else is needed, so it
+ * works for React controls, plain HTML and controls that are re-rendered (the text is read when the tip is shown).
+ *
+ * - Mouse / pen: shows after HOVER_MS of hover; hides on leave, press, scroll, resize or Escape.
+ * - Keyboard: shows at once on :focus-visible; hides on blur or Escape (Escape is swallowed only if a tip was showing).
+ * - Touch: never on hover or tap. A long press (LONG_PRESS_MS) shows it, the press is then not a tap (the click is swallowed),
+ *   and it hides after TOUCH_HOLD_MS or on the next touch. Moving more than MOVE_SLOP px cancels (a scroll).
+ * - The element has role="tooltip"; the trigger gets aria-describedby while it is shown (any existing value is kept).
+ * - It sits in the top layer (popover) so it can appear over modal dialogs, and takes no pointer events, so it never blocks a tap.
+ * - No per-frame work: timers and event handlers only; a 600 ms check runs only while a tip is visible.
+ */
+
+const HOVER_MS = 400;
+const LONG_PRESS_MS = 500;
+const TOUCH_HOLD_MS = 3000;
+const MOVE_SLOP = 10;
+const TIP_ID = 'bw-tooltip';
+
+const SIDES = new Set(['top', 'bottom', 'left', 'right']);
+/** keys that move focus: a focus change right after one of these is keyboard navigation, so it earns a tooltip */
+const NAV_KEYS = new Set(['Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown']);
+
+function installTooltips(doc           = document)               {
+  const win = doc.defaultView ;
+  let el                     = null;
+  let trigger                 = null;
+  let pending                 = null;
+  let hoverTimer = 0, pressTimer = 0, holdTimer = 0, pollTimer = 0, swallowTimer = 0;
+  let observer                          = null;
+  let prevDescribed                = null;
+  let press                                                   = null;
+  let longPressed = false;
+  let swallowClick = false;
+  let lastTouchAt = -Infinity;
+  let navKey = false; // the last thing the user did was a focus-moving key (not a click, not Enter/Space that opened something)
+  let lastX = -1, lastY = -1; // last mouse position, to re-find the control after its page re-renders it
+
+  const tipTarget = (t                    )                 => (t instanceof Element ? t.closest('[data-tip]') : null);
+
+  function ensure(host             )              {
+    if (!el) {
+      el = doc.createElement('div');
+      el.id = TIP_ID;
+      el.className = 'bw-tip';
+      el.setAttribute('role', 'tooltip');
+      el.setAttribute('popover', 'manual'); // top layer: above modal dialogs; harmless where unsupported
+    }
+    if (el.parentNode !== host) host.appendChild(el);
+    return el;
+  }
+
+  function describe(t         )       {
+    prevDescribed = t.getAttribute('aria-describedby');
+    const ids = (prevDescribed ?? '').split(/\s+/).filter(Boolean);
+    if (!ids.includes(TIP_ID)) ids.push(TIP_ID);
+    t.setAttribute('aria-describedby', ids.join(' '));
+  }
+  function undescribe(t         )       {
+    const ids = (t.getAttribute('aria-describedby') ?? '').split(/\s+/).filter((x) => x && x !== TIP_ID);
+    if (ids.length) t.setAttribute('aria-describedby', ids.join(' ')); else t.removeAttribute('aria-describedby');
+    prevDescribed = null;
+  }
+
+  function place(t         )       {
+    if (!el) return;
+    el.style.left = '0px'; el.style.top = '0px';
+    const r = t.getBoundingClientRect(), s = el.getBoundingClientRect();
+    const sideAttr = t.getAttribute('data-tip-side');
+    const p = placeTip(r, { w: s.width, h: s.height }, { w: doc.documentElement.clientWidth, h: win.innerHeight }, sideAttr && SIDES.has(sideAttr) ? (sideAttr        ) : undefined);
+    el.style.left = `${p.x}px`; el.style.top = `${p.y}px`;
+    el.dataset.side = p.side;
+  }
+
+  function show(t         )       {
+    const text = t.getAttribute('data-tip');
+    if (!text) return;
+    if (trigger && trigger !== t) hide();
+    window.clearTimeout(hoverTimer); pending = null;
+    const host = (t.closest('dialog')                      ) ?? doc.body; // a modal dialog makes everything outside it inert
+    const e = ensure(host);
+    e.textContent = text;
+    e.dataset.open = '';
+    try { if (!e.matches(':popover-open')) (e                                              ).showPopover?.(); } catch { /* not supported or already open */ }
+    if (trigger !== t) { describe(t); trigger = t; }
+    place(t);
+    observer?.disconnect();
+    observer = new MutationObserver(() => {
+      if (!trigger) return;
+      const next = trigger.getAttribute('data-tip');
+      if (!next) { hide(); return; }
+      if (el && el.textContent !== next) { el.textContent = next; place(trigger); }
+    });
+    observer.observe(t, { attributes: true, attributeFilter: ['data-tip'] });
+    window.clearInterval(pollTimer);
+    pollTimer = window.setInterval(() => {
+      if (!trigger) return;
+      if (!trigger.isConnected && lastX >= 0 && Date.now() - lastTouchAt > 700) {
+        const n = tipTarget(doc.elementFromPoint(lastX, lastY));
+        if (n && el && n.getAttribute('data-tip') === el.textContent) { rebind(n); return; }
+      }
+      if (!trigger.isConnected || trigger.getClientRects().length === 0) hide();
+    }, 600);
+  }
+
+  /** the control was replaced by an identical one (a page that re-renders itself): keep the tip, follow the new element */
+  function rebind(n         )       {
+    if (trigger) undescribe(trigger);
+    trigger = n;
+    describe(n);
+    observer?.disconnect();
+    observer?.observe(n, { attributes: true, attributeFilter: ['data-tip'] });
+    place(n);
+  }
+
+  function hide()          {
+    window.clearTimeout(hoverTimer); window.clearTimeout(holdTimer); window.clearInterval(pollTimer);
+    pending = null;
+    observer?.disconnect(); observer = null;
+    const was = trigger !== null;
+    if (trigger) { undescribe(trigger); trigger = null; }
+    if (el) {
+      delete el.dataset.open;
+      try { if (el.matches(':popover-open')) (el                                              ).hidePopover?.(); } catch { /* ignore */ }
+    }
+    return was;
+  }
+
+  const focusVisible = (t         )          => { try { return t.matches(':focus-visible'); } catch { return true; } };
+  const touchy = (e              )          => e.pointerType === 'touch';
+
+  const onOver = (e              )       => {
+    if (touchy(e) || Date.now() - lastTouchAt < 700) return; // compatibility events after a touch are not hover
+    lastX = e.clientX; lastY = e.clientY;
+    const t = tipTarget(e.target);
+    if (!t || t === trigger || t === pending) return;
+    if (trigger && !trigger.isConnected && el && t.getAttribute('data-tip') === el.textContent) { rebind(t); return; }
+    window.clearTimeout(hoverTimer);
+    if (trigger) hide();
+    pending = t;
+    hoverTimer = window.setTimeout(() => { pending = null; if (t.isConnected) show(t); }, HOVER_MS);
+  };
+  const onOut = (e              )       => {
+    if (touchy(e)) return;
+    const t = tipTarget(e.target);
+    if (!t || (e.relatedTarget instanceof Node && t.contains(e.relatedTarget))) return;
+    if (t === trigger) hide();
+    else if (t === pending) { window.clearTimeout(hoverTimer); pending = null; }
+  };
+  const onDown = (e              )       => {
+    if (touchy(e)) {
+      lastTouchAt = Date.now();
+      navKey = false;
+      hide(); // the next touch dismisses a long-press tip
+      longPressed = false;
+      window.clearTimeout(pressTimer);
+      const t = tipTarget(e.target);
+      press = t ? { x: e.clientX, y: e.clientY, target: t } : null;
+      if (t) {
+        pressTimer = window.setTimeout(() => { if (press && t.isConnected) { longPressed = true; show(t); } }, LONG_PRESS_MS);
+      }
+      return;
+    }
+    navKey = false;
+    hide(); // pressing a control is using it: the tip gets out of the way
+  };
+  const onMove = (e              )       => {
+    if (!touchy(e)) { lastX = e.clientX; lastY = e.clientY; return; }
+    if (!press) return;
+    if (Math.hypot(e.clientX - press.x, e.clientY - press.y) > MOVE_SLOP) { window.clearTimeout(pressTimer); press = null; if (longPressed) hide(); }
+  };
+  const onUp = (e              )       => {
+    if (!touchy(e)) return;
+    lastTouchAt = Date.now();
+    window.clearTimeout(pressTimer);
+    press = null;
+    if (longPressed && trigger) {
+      // the long press was a request for help, not a tap: swallow the click that follows the release
+      swallowClick = true;
+      window.clearTimeout(swallowTimer);
+      swallowTimer = window.setTimeout(() => { swallowClick = false; }, 800);
+      window.clearTimeout(holdTimer);
+      holdTimer = window.setTimeout(hide, TOUCH_HOLD_MS);
+    }
+    longPressed = false;
+  };
+  const onClick = (e            )       => {
+    if (!swallowClick) return;
+    swallowClick = false;
+    e.preventDefault(); e.stopPropagation();
+  };
+  const onContext = (e       )       => {
+    if (Date.now() - lastTouchAt < 1500 && tipTarget(e.target)) e.preventDefault(); // no OS menu on top of a long-press tip
+  };
+  const onFocusIn = (e            )       => {
+    const t = tipTarget(e.target);
+    // programmatic focus (a dialog focusing its first field, a deep link) is not a request for help: only Tab and arrow keys are
+    if (t && navKey && focusVisible(e.target           )) show(t);
+  };
+  const onFocusOut = (e            )       => {
+    if (!trigger) return;
+    if (e.relatedTarget instanceof Node && trigger.contains(e.relatedTarget)) return;
+    if (tipTarget(e.target) === trigger) hide();
+  };
+  const onKey = (e               )       => {
+    navKey = NAV_KEYS.has(e.key);
+    if (e.key === 'Escape' && hide()) { e.preventDefault(); e.stopPropagation(); }
+  };
+  // a scroll event can arrive just AFTER the pointer reached a control (scrolled into view), so it must not cancel a pending hover
+  const onGone = ()       => { if (trigger) hide(); };
+
+  const opts = { capture: true }         ;
+  doc.addEventListener('pointerover', onOver, opts);
+  doc.addEventListener('pointerout', onOut, opts);
+  doc.addEventListener('pointerdown', onDown, opts);
+  doc.addEventListener('pointermove', onMove, { capture: true, passive: true });
+  doc.addEventListener('pointerup', onUp, opts);
+  doc.addEventListener('pointercancel', onUp, opts);
+  doc.addEventListener('click', onClick, opts);
+  doc.addEventListener('contextmenu', onContext, opts);
+  doc.addEventListener('focusin', onFocusIn, opts);
+  doc.addEventListener('focusout', onFocusOut, opts);
+  doc.addEventListener('keydown', onKey, opts);
+  doc.addEventListener('scroll', onGone, { capture: true, passive: true });
+  win.addEventListener('resize', onGone);
+  win.addEventListener('blur', onGone);
+
+  return {
+    current: () => trigger,
+    destroy: () => {
+      hide();
+      window.clearTimeout(pressTimer); window.clearTimeout(swallowTimer);
+      doc.removeEventListener('pointerover', onOver, opts);
+      doc.removeEventListener('pointerout', onOut, opts);
+      doc.removeEventListener('pointerdown', onDown, opts);
+      doc.removeEventListener('pointermove', onMove, { capture: true });
+      doc.removeEventListener('pointerup', onUp, opts);
+      doc.removeEventListener('pointercancel', onUp, opts);
+      doc.removeEventListener('click', onClick, opts);
+      doc.removeEventListener('contextmenu', onContext, opts);
+      doc.removeEventListener('focusin', onFocusIn, opts);
+      doc.removeEventListener('focusout', onFocusOut, opts);
+      doc.removeEventListener('keydown', onKey, opts);
+      doc.removeEventListener('scroll', onGone, { capture: true });
+      win.removeEventListener('resize', onGone);
+      win.removeEventListener('blur', onGone);
+      el?.remove(); el = null;
+    },
+  };
+}
+
+const escAttr = (s) => String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+/** bwTip.attr('key') -> ' data-tip="..."' for HTML strings; bwTip.text('key') -> the copy; bwTip.apply(root) fills [data-tip-k] */
+window.bwTip = {
+  text: (k) => BW_OPS_TIPS[k] || '',
+  attr: (k) => (BW_OPS_TIPS[k] ? ' data-tip="' + escAttr(BW_OPS_TIPS[k]) + '"' : ''),
+  apply: (root) => root.querySelectorAll('[data-tip-k]').forEach((el) => { const t = BW_OPS_TIPS[el.getAttribute('data-tip-k')]; if (t) el.setAttribute('data-tip', t); }),
+  engine: null,
+};
+window.bwTip.apply(document);
+window.bwTip.engine = installTooltips(document);
+})();
+</script>
+<!-- bw-tips:end -->
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const ago = (iso) => { const s = Math.round((Date.now() - Date.parse(iso)) / 1000); return s < 60 ? s + 's' : s < 3600 ? Math.round(s / 60) + 'm' : Math.round(s / 3600) + 'h'; };
+async function call(path, body) {
+  const r = await fetch('/ops/api/' + path, body ? { method: 'POST', headers: { 'content-type': 'application/json', 'x-botwarren-ops': '1' }, body: JSON.stringify(body), credentials: 'same-origin' } : { credentials: 'same-origin' });
+  if (r.status === 401) { location.href = '/ops'; throw new Error('auth'); }
+  return r.json();
+}
+// only touch the DOM when the markup changed: keeps keyboard focus, hover and open tooltips alive across the 3 s refresh
+function put(el, html) { if (el._h !== html) { el.innerHTML = html; el._h = html; } }
+const TH = { 'releases in': 'releases', 'public payload': 'payload', 'private detail': 'private' };
+function rows(el, head, data, fn) { put(el, '<tr>' + head.map((h) => '<th' + bwTip.attr('th_' + (TH[h] || h)) + '>' + h + '</th>').join('') + '</tr>' + (data.length ? data.map(fn).join('') : '<tr><td colspan="' + head.length + '" class="note">none</td></tr>')); }
+async function refresh() {
+  let d;
+  try { d = await call('state'); } catch (e) { put($('kpis'), '<span class="err">state unavailable</span>'); return; }
+  put($('kpis'), [['journal', d.journalCount], ['sessions', d.sessions.filter((s) => s.status !== 'ended').length], ['queued', d.outbox.length], ['delay', d.delaySeconds + 's'], ['mode', d.demoMode ? 'DEMO' : 'live']].map(([k, v]) => '<span class="kpi" tabindex="0"' + bwTip.attr('kpi_' + k) + '>' + k + ' <b>' + esc(v) + '</b></span>').join(''));
+  put($('kill'), d.killSwitch
+    ? '<b class="err" tabindex="0"' + bwTip.attr('killOn') + '>PUBLICATION STOPPED' + (d.remotePaused ? ' (paused from your account page)' : '') + '</b><button class="ok" id="resume"' + bwTip.attr('resume') + '>Resume publishing</button>'
+    : '<span tabindex="0"' + bwTip.attr('killOff') + '>Publishing live</span><button class="danger" id="stop"' + bwTip.attr('stop') + '>Emergency stop</button>');
+  if ($('stop')) $('stop').onclick = async () => { if (confirm('Stop ALL public publication now?')) { await call('kill', { on: true }); refresh(); } };
+  if ($('resume')) $('resume').onclick = async () => { if (confirm('Resume public publication?')) { await call('kill', { on: false }); refresh(); } };
+  const ss = [...d.sessions].sort((a, b) => (a.status === 'ended') - (b.status === 'ended') || a.ageSeconds - b.ageSeconds);
+  rows($('sessions'), ['project', 'harness', 'status', 'seen', 'attribution', 'pane', 'cwd', 'title'], ss, (s) => '<tr><td>' + esc(s.projectId ?? '—unattributed—') + '</td><td>' + esc(s.harness) + '</td><td class="s-' + esc(s.status) + '">' + esc(s.status) + '</td><td>' + s.ageSeconds + 's</td><td>' + esc(s.attributionCertainty) + '</td>' + provenance(d, s.sessionKey) + '</tr>');
+  rows($('feeds'), ['feed', 'health', 'last'], Object.entries(d.collectors), ([k, v]) => '<tr><td>' + esc(k) + '</td><td class="s-' + esc(v.health) + '">' + esc(v.health) + '</td><td>' + ago(v.lastHeartbeatAt) + '</td></tr>');
+  put($('pubctl'), '<label' + bwTip.attr('delay') + '>Delay <input id="delay"' + bwTip.attr('delay') + ' type="range" min="30" max="120" step="5" value="' + d.delaySeconds + '"> <b id="dv">' + d.delaySeconds + 's</b></label><p class="note">Public projects: ' + esc(d.publicProjects.join(', ')) + '. Delay is not a privacy filter — classification happens first.</p><button id="purge"' + bwTip.attr('purge') + '>Purge public history…</button>');
+  $('delay').oninput = (e) => { $('dv').textContent = e.target.value + 's'; };
+  $('delay').onchange = async (e) => { await call('delay', { seconds: Number(e.target.value) }); refresh(); };
+  $('purge').onclick = async () => { if (confirm('Delete all published public events and clear the queue? Copies already seen by viewers, caches or OBS recordings cannot be recalled.')) { await call('purge', {}); refresh(); } };
+  $('qcount').textContent = d.outbox.length;
+  rows($('outbox'), ['releases in', 'kind', 'public payload'], d.outbox.slice(0, 80), (o) => '<tr><td><div class="bar"><i style="width:' + Math.max(0, 100 - (o.releaseInSeconds / d.delaySeconds) * 100) + '%"></i></div>' + o.releaseInSeconds + 's</td><td>' + esc(o.kind) + '</td><td class="mono">' + esc(JSON.stringify(o.draft)) + '</td></tr>');
+  const pipes = [...d.pipelines].sort((a, b) => (a.sourceUpdatedAt < b.sourceUpdatedAt ? 1 : -1)).slice(0, 40);
+  rows($('pipes'), ['project', 'provider', 'purpose', 'status', 'updated', 'jobs'], [...d.deploys.map((x) => ({ deploy: x })), ...pipes], (p) => p.deploy
+    ? '<tr><td>' + esc(p.deploy.projectId) + '</td><td>deploy</td><td>' + esc(p.deploy.evidence) + '</td><td class="s-' + esc(p.deploy.phase) + '">' + esc(p.deploy.phase) + '</td><td>' + ago(p.deploy.sourceUpdatedAt) + '</td><td></td></tr>'
+    : '<tr><td>' + esc(p.projectId) + '</td><td>' + esc(p.provider) + '</td><td>' + esc(p.purpose) + '</td><td class="s-' + esc(p.status) + '">' + esc(p.status) + '</td><td>' + ago(p.sourceUpdatedAt) + '</td><td>' + Object.keys(p.jobs).length + '</td></tr>');
+  $('qq').textContent = Object.values(d.quarantineCounts).reduce((a, b) => a + b, 0);
+  rows($('quarantine'), ['at', 'reason', 'detail'], d.quarantine, (q) => '<tr><td>' + ago(q.at) + '</td><td>' + esc(q.reason) + '</td><td class="mono">' + esc(q.detail) + '</td></tr>');
+  rows($('audit'), ['at', 'actor', 'action', 'detail'], d.audit, (a) => '<tr><td>' + ago(a.at) + '</td><td>' + esc(a.actor) + '</td><td>' + esc(a.action) + '</td><td>' + esc(a.detail) + '</td></tr>');
+  rows($('recent'), ['occurred', 'source', 'type', 'private detail'], d.recent, (e) => '<tr><td>' + ago(e.occurredAt) + '</td><td>' + esc(e.source) + '</td><td>' + esc(e.type) + '</td><td class="mono">' + esc(JSON.stringify(e.private)) + '</td></tr>');
+}
+
+(d, key) {
+function provenance(d, key) {
+  const hit = (d.provenance || {})[key];
+  if (!hit) return '<td class="mono note" colspan="3">' + esc(key.slice(0, 18)) + '…</td>';
+  return '<td class="mono">' + esc(hit.pane) + '</td><td class="mono">' + esc(hit.cwd) + '</td><td>' + esc(hit.title) + '</td>';
+}
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

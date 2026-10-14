@@ -1,0 +1,42 @@
+{
+  "name": "botwarren-ship",
+  "version": "0.5.0",
+  "private": true,
+  "description": "Botwarren ship agent: turns what your AI coding agents are doing into a delayed, metadata-only status feed.",
+  "license": "Apache-2.0",
+  "homepage": "https://botwarren.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/turbokast/botwarren-ship.git"
+  },
+  "bugs": {
+    "email": "support@turbokast.com"
+  },
+  "type": "module",
+  "packageManager": "pnpm@11.5.2",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "bin": {
+    "botwarren": "./src/cli.ts"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/main.ts",
+    "cli": "node --disable-warning=ExperimentalWarning src/cli.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "release:build": "node scripts/build-release.mjs",
+    "release:sign": "node scripts/release-sign.mjs",
+    "release:keygen": "node scripts/release-keygen.mjs",
+    "release:templates": "node scripts/render-package-templates.mjs"
+  },
+  "dependencies": {
+    "zod": "4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "22.18.12",
+    "esbuild": "0.25.12",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
+  }
+}

@@ -1,0 +1,5 @@
+# pnpm settings (this is a single-package repository)
+allowBuilds:
+  esbuild: true
+overrides:
+  vite: 7.3.7

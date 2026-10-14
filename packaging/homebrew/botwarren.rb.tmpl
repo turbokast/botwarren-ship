@@ -1,0 +1,75 @@
+# Homebrew formula TEMPLATE for the tap turbokast/homebrew-tap (NOT published). Rendered by
+# scripts/render-package-templates.mjs from a signed release manifest; the at-sign markers below are filled with the real
+# URLs and SHA-256 values. Homebrew installs the same archive the curl installer uses (pinned Node + launcher + agent).
+#
+#   brew install turbokast/tap/botwarren
+#   botwarren pair
+#   brew services start botwarren
+#
+# Package-manager installs NEVER self-update: the wrapper sets BOTWARREN_INSTALL_METHOD=brew, so the agent's updater stays off
+# and `brew upgrade botwarren` is the only update path. (Homebrew users still get the signed-manifest check at install time
+# through the checksums below, which come from the signed manifest.)
+class Botwarren < Formula
+  desc "Botwarren ship agent: shows your AI coding agents as a live crew (metadata only)"
+  homepage "https://github.com/turbokast/botwarren-ship"
+  version "@VERSION@"
+  license "@LICENSE@"
+
+  on_macos do
+    on_arm do
+      url "@URL_MAC_ARM64@"
+      sha256 "@SHA_MAC_ARM64@"
+    end
+    on_intel do
+      url "@URL_MAC_X64@"
+      sha256 "@SHA_MAC_X64@"
+    end
+  end
+
+  on_linux do
+    on_arm do
+      url "@URL_LINUX_ARM64@"
+      sha256 "@SHA_LINUX_ARM64@"
+    end
+    on_intel do
+      url "@URL_LINUX_X64@"
+      sha256 "@SHA_LINUX_X64@"
+    end
+  end
+
+  def install
+    libexec.install Dir["*"]
+    node = libexec/"runtime/node/node"
+    (bin/"botwarren").write <<~SH
+      #!/bin/sh
+      export BOTWARREN_HOME="#{libexec}" BOTWARREN_INSTALL_METHOD=brew
+      exec "#{node}" --disable-warning=ExperimentalWarning "#{libexec}/launcher/launcher.mjs" cli "$@"
+    SH
+    (bin/"botwarren-agent").write <<~SH
+      #!/bin/sh
+      export BOTWARREN_HOME="#{libexec}" BOTWARREN_INSTALL_METHOD=brew
+      exec "#{node}" --disable-warning=ExperimentalWarning "#{libexec}/launcher/launcher.mjs" run
+    SH
+    chmod 0755, [bin/"botwarren", bin/"botwarren-agent"]
+  end
+
+  service do
+    run [opt_bin/"botwarren-agent"]
+    keep_alive true
+    log_path var/"log/botwarren.log"
+    error_log_path var/"log/botwarren.log"
+  end
+
+  def caveats
+    <<~EOS
+      Connect this computer to your ship:   botwarren pair
+      Then start the background agent:      brew services start botwarren
+      Tools Botwarren can see:              botwarren adapters
+      Only metadata (ids, states, folders) is read. Nothing a tool prints or edits leaves your computer.
+    EOS
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/botwarren --version")
+  end
+end

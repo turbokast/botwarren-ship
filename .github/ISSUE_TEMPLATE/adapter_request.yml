@@ -1,0 +1,32 @@
+name: Support for another tool (adapter)
+description: Ask for, or propose, an adapter for an AI coding tool
+labels: [adapter]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        An adapter may only read metadata that the tool exposes locally and may only emit enums, bounded integers and id-like keys (see CONTRIBUTING.md). Describe what the tool exposes; do not paste real session content.
+  - type: input
+    id: tool
+    attributes:
+      label: Tool and version
+    validations:
+      required: true
+  - type: textarea
+    id: exposes
+    attributes:
+      label: What does the tool expose locally?
+      description: Log files, a local HTTP API, a socket, hooks. Link to the documentation if there is some.
+    validations:
+      required: true
+  - type: textarea
+    id: signals
+    attributes:
+      label: Which signals would be useful?
+      description: For example working, idle or waiting for you, sub-agents, context fill.
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contributing
+      options:
+        - label: I would like to write this adapter (with a canary test scenario)

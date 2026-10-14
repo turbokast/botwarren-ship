@@ -1,0 +1,11 @@
+Botwarren ship agent
+Copyright 2026 TurboKast Ltd
+
+This product includes software developed at TurboKast Ltd (https://botwarren.com).
+
+Botwarren and TurboKast are names of TurboKast Ltd. The Apache License 2.0 does not grant
+permission to use these names or logos except for reasonable and customary use in describing
+the origin of the software (Section 6 of the License).
+
+The release archives bundle an unmodified, official Node.js runtime (https://nodejs.org, MIT
+licence; its LICENSE file is included next to the binary in every archive).

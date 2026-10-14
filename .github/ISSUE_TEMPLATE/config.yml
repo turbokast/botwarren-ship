@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security or privacy problem
+    url: https://github.com/turbokast/botwarren-ship/blob/main/SECURITY.md
+    about: Do not open a public issue. Email support@turbokast.com or use private vulnerability reporting.
+  - name: What the agent reads and sends
+    url: https://botwarren.com/trust.html
+    about: The trust page explains exactly what leaves your computer.
