@@ -16,6 +16,7 @@ import { signManifestBytes } from '../../src/update/verify.ts';
 // @ts-expect-error plain JS module without types
 import { buildRelease } from '../../scripts/build-release.mjs';
 import { mkTmp, rmTmp } from '../update/kit.ts';
+import { VERSION } from '../../src/version.ts';
 
 const ROOT = resolve(import.meta.dirname, '../..');
 const INSTALL = join(ROOT, 'packaging', 'install.sh');
@@ -76,7 +77,7 @@ describe.skipIf(!haveKey)('install.sh / uninstall.sh against a locally served, s
     expect(JSON.parse(readFileSync(join(root, 'state', 'install-receipt.json'), 'utf8')).method).toBe('standalone');
     expect(statSync(join(root, 'state')).mode & 0o777).toBe(0o700);
     const v = spawnSync(join(home, '.local', 'bin', 'botwarren'), ['--version'], { encoding: 'utf8', env: { PATH: process.env.PATH ?? '', HOME: home } });
-    expect(v.stdout).toContain('0.5.0');
+    expect(v.stdout).toContain(VERSION); // the installed command prints the version of the agent source it was built from
     const st = spawnSync(join(home, '.local', 'bin', 'botwarren'), ['update', 'status'], { encoding: 'utf8', env: { PATH: process.env.PATH ?? '', HOME: home } });
     expect(st.stdout).toContain('install method: standalone');
     expect(st.stdout).toContain('downloads.botwarren.com'); // the default host, even though THIS install used a test base URL

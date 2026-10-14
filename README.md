@@ -7,7 +7,7 @@ The ship agent runs on your own computer and turns what your AI coding agents ar
 
 This repository is the whole agent. The Botwarren website, hosted service and artwork are separate and not part of it. Everything the agent reads, keeps and sends is in this repository, so you can check it.
 
-> Status: pre-release (0.5.x). Pairing a computer with a ship is not in this version yet (see [Use](#use)). Releases are not yet signed for automatic updates (see [Verify a release](#verify-a-release)).
+> Status: pre-release (0.5.x). Pairing a computer with a ship is not in this version yet (see [Use](#use)). Releases are not yet signed for automatic updates: installs are checksum-verified and update by re-running the installer (see [Install](#install) and [Verify a release](#verify-a-release)).
 
 ## What it reads and what it sends
 
@@ -29,19 +29,38 @@ The full explanation, with the exact list of events and the checks that enforce 
 
 Releases are published on the [Releases page](https://github.com/turbokast/botwarren-ship/releases) and at `https://downloads.botwarren.com/`, with a `SHA256SUMS` file and GitHub build attestations (see [Verify a release](#verify-a-release)).
 
-The one-line installers (per user, no administrator rights; they download a pinned official Node.js runtime together with the agent, check a signed release manifest, install under `~/.local/share/botwarren` or `%LOCALAPPDATA%\Botwarren`, add a `botwarren` command and register a per-user background service):
+The one-line installers are per user (no administrator rights). They download a pinned official Node.js runtime together with the agent, install under `~/.local/share/botwarren` or `%LOCALAPPDATA%\Botwarren`, add a `botwarren` command and register a per-user background service. They have two ways to decide that the download is the real one:
+
+| | Signed manifest (preferred) | Checksum only (what exists today) |
+|---|---|---|
+| How | The archive's hash must be in a release manifest signed with the Ed25519 release key that is compiled into the agent. | The archive's hash must match `https://downloads.botwarren.com/<version>/SHA256SUMS`, fetched over HTTPS. |
+| Needs | A published, signed manifest. The production release key exists; releases carry a manifest once signed mode is switched on ([docs/RELEASING.md](docs/RELEASING.md)). Release approval is currently by a single maintainer. | Nothing but the release. You ask for it explicitly. |
+| Protects against | A compromised download host or a man in the middle. | A corrupted or tampered download in transit (TLS) and mix-ups between files. **Not** a compromised download host: someone who controls it could change the archive and its checksum together. |
+| Auto-update | On, silent, signed, reversible. | **Disabled** for this install until a signed manifest exists. The updater never runs unsigned code. |
+
+Without `--checksum-only` the installers use the signed path, and if the release has no signed manifest they stop and tell you so; they never quietly fall back.
 
 ```sh
-# macOS and Linux
+# macOS and Linux: signed manifest (stops with a clear message while no manifest is published)
 curl -fsSL https://downloads.botwarren.com/install.sh | sh
+
+# macOS and Linux: checksum-verified, a version you name (or the newest from latest.txt if you leave out --version)
+curl -fsSL https://downloads.botwarren.com/install.sh | sh -s -- --checksum-only --version 0.5.0
 ```
 
 ```powershell
-# Windows 10 and 11
+# Windows 10 and 11: signed manifest
 irm https://downloads.botwarren.com/install.ps1 | iex
+
+# Windows: checksum-verified (options are environment variables so they also work under iex)
+$env:BOTWARREN_CHECKSUM_ONLY = '1'; $env:BOTWARREN_VERSION = '0.5.0'; irm https://downloads.botwarren.com/install.ps1 | iex
 ```
 
-Prefer to read first: both scripts are in [`packaging/`](packaging/). **Important, for now:** the installers refuse to install anything that is not described by a *signed* release manifest, and releases are published without one until the production release key exists ([docs/RELEASING.md](docs/RELEASING.md)). Until then the installers stop with a clear message, and the supported way to try a release is the manual route below.
+Checksum mode in detail: it resolves the version (`--version X.Y.Z`, or the one line in `https://downloads.botwarren.com/latest.txt`), downloads `<version>/SHA256SUMS`, requires the archive for your system to be listed there, downloads the archive, compares its SHA-256, lists it and refuses unsafe paths, and only then installs. It prints that auto-update is disabled for the install and records `"verification": "sha256sums"` in the install receipt. `latest.txt` and `SHA256SUMS` are plain files with the same trust as the host, which is why the table above is honest about what this mode does not cover.
+
+**Trust trade-off, in one sentence:** the archive is verified over HTTPS against the published checksums; you can also verify it against the GitHub Release and its build-provenance attestation, which does not depend on the download host (see [Verify a release](#verify-a-release)). To do that before installing, fetch the archive and `SHA256SUMS` yourself, verify them there, and use the manual route below.
+
+Prefer to read first: both scripts are in [`packaging/`](packaging/) (`install.sh --help` lists every option).
 
 ### Manual install of a release archive
 
@@ -90,7 +109,7 @@ Configure in `config.json`: `"adapters": { "ninox": { "enabled": true, "port": 8
 
 ## Updates
 
-Automatic updates are designed to be silent, signed and reversible: a release is described by a manifest signed with an Ed25519 key whose public half is compiled into the agent; the agent refuses anything not listed in it with a matching SHA-256, refuses older manifests, and runs a new version on trial and rolls back if it is unhealthy. **Until a production release key exists no manifest is published, so the updater has nothing to fetch and stays inert.** The only dev public key compiled in is refused unless you set `BOTWARREN_UPDATE_ALLOW_DEV_KEY=1`.
+Automatic updates are designed to be silent, signed and reversible: a release is described by a manifest signed with an Ed25519 key whose public half is compiled into the agent; the agent refuses anything not listed in it with a matching SHA-256, refuses older manifests, and runs a new version on trial and rolls back if it is unhealthy. **Until a production release key exists no manifest is published, so the updater has nothing to fetch and stays inert, and an install made with `--checksum-only` is not updated automatically** (re-run the installer to move to a newer version; once signed manifests exist the same install starts receiving signed updates, because the agent verifies them itself). The only dev public key compiled in is refused unless you set `BOTWARREN_UPDATE_ALLOW_DEV_KEY=1`.
 
 An update check is two static file downloads from `https://downloads.botwarren.com/` and sends only the HTTP request itself (with a `botwarren-agent/<version>` user agent). There is no telemetry. Turn it off: `BOTWARREN_DISABLE_AUTOUPDATE=1` (manual `botwarren update` still works), `BOTWARREN_DISABLE_UPDATES=1` (no update traffic at all), or `"updates": { "enabled": false }` in `config.json`. Installs made by a package manager never self-update.
 
@@ -102,6 +121,17 @@ Every release archive is built by [`release.yml`](.github/workflows/release.yml)
 sha256sum --check --ignore-missing SHA256SUMS          # macOS: shasum -a 256 -c SHA256SUMS
 gh attestation verify botwarren-<version>-linux-x64.tar.gz --repo turbokast/botwarren-ship
 ```
+
+The checksum list can come from `https://downloads.botwarren.com/<version>/SHA256SUMS` or from the GitHub Release; compare the two (they must be identical). Only the attestation is independent of the download host, so for a stricter check pin what it must say:
+
+```sh
+gh attestation verify botwarren-<version>-linux-x64.tar.gz --repo turbokast/botwarren-ship \
+  --signer-workflow turbokast/botwarren-ship/.github/workflows/release.yml --source-ref refs/tags/v<version>
+# offline, from the attestation bundle attached to the Release (the file attestations-<version>.sigstore.jsonl):
+gh attestation verify botwarren-<version>-linux-x64.tar.gz --repo turbokast/botwarren-ship --bundle attestations-<version>.sigstore.jsonl
+```
+
+(Needs the GitHub CLI; the first form asks GitHub's API for the attestations of the file's SHA-256, so run `gh auth login` first. On Windows, `Get-FileHash <file> -Algorithm SHA256` gives the hash to compare with `SHA256SUMS`.)
 
 The attestation proves the file was produced by that workflow in this repository at that commit. Reproducible builds (fixed timestamps, sorted entries) let you rebuild and compare hashes: see [Build from source](#build-from-source) and [docs/RELEASING.md](docs/RELEASING.md).
 

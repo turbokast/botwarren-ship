@@ -9,6 +9,7 @@ import { createServer as createHttp, type Server as HttpServer, type IncomingMes
 import { createServer as createNet, type Server as NetServer, type Socket } from 'node:net';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { expect } from 'vitest';
 import { CanonicalEvent, projectPublic, type CanonicalEventInput } from '../../src/vendor/core/contract.ts';
@@ -47,10 +48,26 @@ export async function fakeHttp(routes: Record<string, unknown | ((req: IncomingM
   return { port, requests, server, close: () => new Promise<void>((r) => { server.closeAllConnections(); server.close(() => r()); }) };
 }
 
-/** A unix-socket JSON-RPC server (newline-delimited) answering `agent.list` / `ping`; records every method it gets. */
+/**
+ * The endpoint a fake Herdr listens on for the config directory `dir`: `<dir>/herdr.sock` on POSIX; on Windows a named pipe whose
+ * name is derived from `dir` (stable, so a restarted fake reuses the same endpoint), because Windows has no usable unix-socket path
+ * in a temp folder and Herdr itself is a named pipe there.
+ */
+export function herdrEndpoint(dir: string): string {
+  if (process.platform === 'win32') return `\\\\.\\pipe\\bw-herdr-${createHash('sha1').update(dir).digest('hex').slice(0, 16)}`;
+  return join(dir, 'herdr.sock');
+}
+
+/** The Host an adapter sees when the fake Herdr for `dir` is running: linux/posix, or win32 with the pipe given explicitly (the only way Windows Herdr is found). */
+export function herdrHost(home: string, dir: string, env: Record<string, string | undefined> = {}): Host {
+  if (process.platform === 'win32') return { platform: 'win32', home, env: { ...env, HERDR_SOCKET_PATH: herdrEndpoint(dir) } };
+  return linuxHost(home, env);
+}
+
+/** A unix-socket (Windows: named pipe) JSON-RPC server (newline-delimited) answering `agent.list` / `ping`; records every method it gets. */
 export async function fakeHerdr(dir: string, agents: () => unknown[]): Promise<{ path: string; methods: string[]; close: () => Promise<void> }> {
   mkdirSync(dir, { recursive: true });
-  const path = join(dir, 'herdr.sock');
+  const path = herdrEndpoint(dir);
   const methods: string[] = [];
   const socks = new Set<Socket>();
   const server: NetServer = createNet((s) => {

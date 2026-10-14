@@ -30,6 +30,11 @@ export const ShipConfigSchema = z.object({
   /** File holding the ship secret (separate, user-only ACL). */
   secretFile: z.string().min(1).optional(),
   delaySeconds: z.number().int().min(30).max(120).default(90),
+  /**
+   * Written by `botwarren pair`: until this moment (about 15 minutes after pairing) the agent publishes with the 30 s minimum
+   * delay so the first crew member shows up fast, then it returns to `delaySeconds`. Absent = never.
+   */
+  onboardingUntil: z.string().datetime().optional(),
   projects: z.array(ProjectConfig).min(1).max(8),
   harnessLogDirs: z.array(z.string().min(1)).min(1).optional(),
   /** Codex session log roots (default ~/.codex/sessions). Empty list disables Codex pairing. */
@@ -52,6 +57,8 @@ export interface ShipConfig {
   replicaUrl: string;
   secretFile: string;
   delaySeconds: number;
+  /** epoch ms until which the short onboarding delay applies (null = not onboarding) */
+  onboardingUntil: number | null;
   projects: { id: string; publicName: string; realName: string | null; repoPaths: string[] }[];
   harnessLogDirs: string[];
   codexLogDirs: string[];
@@ -72,6 +79,7 @@ export function resolveConfig(raw: unknown, host: Host = currentHost()): ShipCon
     replicaUrl: c.replicaUrl,
     secretFile: c.secretFile ?? defaultSecretFile(host),
     delaySeconds: c.delaySeconds,
+    onboardingUntil: c.onboardingUntil ? Date.parse(c.onboardingUntil) : null,
     projects: c.projects.map((p) => ({ id: p.id, publicName: p.publicName ?? defaultPublicName(c.shipId), realName: p.realName ?? null, repoPaths: p.repoPaths })),
     harnessLogDirs: c.harnessLogDirs ?? defaultHarnessDirs(host),
     codexLogDirs: c.codexLogDirs ?? defaultCodexDirs(host),
@@ -84,7 +92,7 @@ export function resolveConfig(raw: unknown, host: Host = currentHost()): ShipCon
 }
 
 export function loadConfig(path: string = process.env.BOTWARREN_SHIP_CONFIG ?? configPath(), host: Host = currentHost()): ShipConfig {
-  if (!existsSync(path)) throw new Error(`Botwarren ship config not found at ${path}. Run the installer (or create it as described in the README).`);
+  if (!existsSync(path)) throw new Error(`Botwarren ship config not found at ${path}. Run \`botwarren pair\` to connect this computer to your ship (see the README).`);
   let raw: unknown;
   try { raw = JSON.parse(readFileSync(path, 'utf8').replace(/^﻿/, '')); } // PowerShell may write a BOM
   catch (e) { throw new Error(`Config ${path} is not valid JSON: ${(e as Error).message}`); }

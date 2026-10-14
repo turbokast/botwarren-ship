@@ -1,10 +1,9 @@
-import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { HERDR_ALLOWED_METHODS, HerdrAdapter, HerdrRpc, herdrTargets } from '../../src/adapters/herdr.ts';
 import { PolicyError } from '../../src/adapters/api.ts';
 import { makeDetectEnv } from '../../src/adapters/config.ts';
-import { CANARY_CONTENT, CANARY_PATH, ended, fakeHerdr, linuxHost, makeHost, mkTmp, rmTmp, sessions } from './kit.ts';
+import { CANARY_CONTENT, ended, fakeHerdr, herdrHost, linuxHost, makeHost, mkTmp, rmTmp, sessions } from './kit.ts';
 
 const NOW = new Date('2026-10-14T12:00:00.000Z');
 const at = (s: number) => new Date(NOW.getTime() + s * 1000);
@@ -56,10 +55,11 @@ describe('HerdrAdapter against a fake socket', () => {
 
   it('observes agents with the documented session id as the key, drops content, and never sends a write method', async () => {
     const home = mkTmp(); cleanup.push(() => rmTmp(home));
-    const srv = await fakeHerdr(join(home, '.config', 'herdr'), agentsFor('/work/game'));
+    const dir = join(home, '.config', 'herdr');
+    const srv = await fakeHerdr(dir, agentsFor('/work/game'));
     cleanup.push(srv.close);
-    const adapter = new HerdrAdapter(linuxHost(home));
-    const { host, logs } = makeHost({ adapters: [{ adapter }], host: linuxHost(home), projects });
+    const adapter = new HerdrAdapter(herdrHost(home, dir));
+    const { host, logs } = makeHost({ adapters: [{ adapter }], host: herdrHost(home, dir), projects });
     const evs = await host.tick(NOW);
     const s = sessions(evs);
     expect(s.map((e) => e.sessionKey).sort()).toEqual([`claude:${UUID}`, 'pane:p3']);
@@ -72,7 +72,8 @@ describe('HerdrAdapter against a fake socket', () => {
     await adapter.stop();
   });
 
-  it('follows named sessions and HERDR_SESSION; a vanished pane ends only while Herdr answers', async () => {
+  // Named sessions are folders of unix sockets under the Herdr config dir: a POSIX layout. On Windows Herdr is one explicitly named pipe.
+  it.skipIf(process.platform === 'win32')('follows named sessions and HERDR_SESSION; a vanished pane ends only while Herdr answers', async () => {
     const home = mkTmp(); cleanup.push(() => rmTmp(home));
     let list: unknown[] = [{ agent: 'opencode', agent_status: 'idle', cwd: '/work/game', pane_id: 'p9' }];
     const srv = await fakeHerdr(join(home, '.config', 'herdr', 'sessions', 'work'), () => list);
@@ -92,8 +93,8 @@ describe('HerdrAdapter against a fake socket', () => {
     const home = mkTmp(); cleanup.push(() => rmTmp(home));
     const dir = join(home, '.config', 'herdr');
     let srv = await fakeHerdr(dir, agentsFor('/work/game'));
-    const adapter = new HerdrAdapter(linuxHost(home));
-    const { host } = makeHost({ adapters: [{ adapter }], host: linuxHost(home), projects });
+    const adapter = new HerdrAdapter(herdrHost(home, dir));
+    const { host } = makeHost({ adapters: [{ adapter }], host: herdrHost(home, dir), projects });
     expect(sessions(await host.tick(NOW)).length).toBeGreaterThan(0);
     await srv.close();
     const down = await host.tick(at(3));
@@ -107,7 +108,7 @@ describe('HerdrAdapter against a fake socket', () => {
     await adapter.stop();
   });
 
-  it('detects: socket present -> high; installed only -> medium; Windows without a pipe -> not found with a note', async () => {
+  it.skipIf(process.platform === 'win32')('detects: socket present -> high; not running and not installed -> not found', async () => {
     const home = mkTmp(); cleanup.push(() => rmTmp(home));
     const host = linuxHost(home);
     const a = new HerdrAdapter(host);
@@ -115,11 +116,14 @@ describe('HerdrAdapter against a fake socket', () => {
     const srv = await fakeHerdr(join(home, '.config', 'herdr'), () => []);
     cleanup.push(srv.close);
     expect(await a.detect(makeDetectEnv(host, { enabled: 'auto' }, []))).toMatchObject({ found: true, confidence: 'high' });
+  });
+
+  it('detects on Windows only an explicitly named pipe (never a guessed pipe name), with an UNVERIFIED note otherwise', async () => {
     const w = { platform: 'win32' as const, home: 'C:\\Users\\u', env: {} };
     const d = await new HerdrAdapter(w).detect(makeDetectEnv(w, { enabled: 'auto' }, []));
     expect(d.found).toBe(false);
     expect(d.note).toContain('UNVERIFIED');
-    mkdirSync(join(home, 'x'), { recursive: true });
-    void CANARY_PATH;
+    const p = { platform: 'win32' as const, home: 'C:\\Users\\u', env: { HERDR_SOCKET_PATH: '\\\\.\\pipe\\herdr-abc' } };
+    expect(await new HerdrAdapter(p).detect(makeDetectEnv(p, { enabled: 'auto' }, []))).toMatchObject({ found: true, confidence: 'low' });
   });
 });

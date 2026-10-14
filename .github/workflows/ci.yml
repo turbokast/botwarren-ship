@@ -47,6 +47,10 @@ jobs:
       - name: Test
         run: pnpm test
 
+      - name: Release signing dry run (sign-manifest with a MOCKED Cloud KMS; no credentials, no network)
+        if: matrix.os == 'ubuntu-latest'
+        run: node scripts/release-dry-run.mjs
+
   shellcheck:
     name: shellcheck installers
     runs-on: ubuntu-latest

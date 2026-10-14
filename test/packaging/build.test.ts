@@ -162,11 +162,15 @@ describe('build-release (no network)', () => {
     expect(readFileSync(join(r2.dir, 'install-index.txt'), 'utf8').split('\n')[0]!.startsWith('0.7.1 ')).toBe(true);
   }, 60_000);
 
-  it('--release refuses to build while a DEV key is pinned (release gate)', async () => {
-    expect(PINNED_PUBLIC_KEYS.some((k) => k.dev)).toBe(true);
+  it('--release gate: needs a production release key and the 3 recovery keys pinned; the real pinned list passes it, the dev key alone does not', async () => {
     const out = mkTmp(); cleanup.push(() => rmTmp(out));
-    await expect(buildRelease({ version: '0.7.2', out, runtime: false, release: true, log: () => {}, env: {} })).rejects.toThrow(/DEV public key/);
-  });
+    const o = { version: '0.7.2', out, runtime: false, release: true, log: () => {}, env: {} };
+    await expect(buildRelease({ ...o, pinnedKeys: PINNED_PUBLIC_KEYS.filter((k) => k.dev) })).rejects.toThrow(/no production \(non-dev\) release public key/);
+    await expect(buildRelease({ ...o, pinnedKeys: PINNED_PUBLIC_KEYS.filter((k) => k.role !== 'recovery') })).rejects.toThrow(/recovery public keys/);
+    await expect(buildRelease({ ...o, pinnedKeys: PINNED_PUBLIC_KEYS.filter((k) => k.id !== 'recovery-3') })).rejects.toThrow(/recovery public keys/);
+    const r = await buildRelease(o); // the real list: passes the gate (and builds the bundle + manifest)
+    expect(r.manifest.epoch).toBe(1);
+  }, 60_000);
 
   it('--no-runtime builds only the update bundle and manifest (no full archives)', async () => {
     const out = mkTmp(); cleanup.push(() => rmTmp(out));
@@ -325,11 +329,12 @@ describe('tar writer interop', () => {
     const d = mkTmp(); cleanup.push(() => rmTmp(d));
     const f = join(d, 'a.tar.gz');
     writeFileSync(f, writeTarGz([{ name: 'runtime/node/node', data: Buffer.from('#!/bin/sh\n'), mode: 0o755 }, { name: 'current.json', data: Buffer.from('{}'), mode: 0o644 }]));
-    const l = spawnSync('tar', ['-tzf', f], { encoding: 'utf8' });
+    // relative names with cwd = the temp dir: GNU tar reads "C:\..." as host:path, and bsdtar (Windows) copes either way
+    const l = spawnSync('tar', ['-tzf', 'a.tar.gz'], { encoding: 'utf8', cwd: d });
     expect(l.status).toBe(0);
-    expect(l.stdout.trim().split('\n').sort()).toEqual(['current.json', 'runtime/node/node']);
+    expect(l.stdout.trim().split(/\r?\n/).sort()).toEqual(['current.json', 'runtime/node/node']);
     mkdirSync(join(d, 'x'));
-    expect(spawnSync('tar', ['-xzf', f, '-C', join(d, 'x')]).status).toBe(0);
+    expect(spawnSync('tar', ['-xzf', 'a.tar.gz', '-C', 'x'], { cwd: d }).status).toBe(0);
     expect(readFileSync(join(d, 'x', 'current.json'), 'utf8')).toBe('{}');
     void gzipSync;
   });

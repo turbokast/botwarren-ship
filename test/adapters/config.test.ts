@@ -34,7 +34,8 @@ describe('adapter settings in config.json', () => {
     const j = JSON.parse(readFileSync(f, 'utf8'));
     expect(j.delaySeconds).toBe(60);
     expect(j.adapters).toEqual({ ninox: { enabled: false }, 'gemini-cli': { enabled: 'auto' } });
-    expect(statSync(f).mode & 0o777).toBe(0o600);
+    // POSIX permission bits do not exist on Windows (stat reports 0o666; per-user ACLs apply instead)
+    if (process.platform !== 'win32') expect(statSync(f).mode & 0o777).toBe(0o600);
     expect(() => setAdapterEnabled(f, 'cursor' as never, true)).toThrow(/unknown adapter/);
     expect(() => resolveConfig(j, linuxHost('/h'))).not.toThrow();
   });

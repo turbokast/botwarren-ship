@@ -90,10 +90,11 @@ The only thing that makes a download executable is a **signed manifest that list
 | Bad release reaches everyone | `blocked`, `minSupported`, staged rollout, then trial with automatic rollback on the client |
 | Malicious archive | Entry names validated (no absolute, drive letters, `..`), regular files only, size caps, CRC checks |
 | Insecure transport | `https` only (`http` only for loopback), no credentials in URLs |
-| Dev key in production | Keys flagged `dev` are refused unless `BOTWARREN_UPDATE_ALLOW_DEV_KEY=1`; `build-release.mjs --release` refuses while one is pinned |
+| Dev key in production | Keys flagged `dev` are refused unless `BOTWARREN_UPDATE_ALLOW_DEV_KEY=1`; CI never uses one; `build-release.mjs --release` requires the production and recovery keys to be pinned |
+| Compromised or lost release key | The release key is a non-exportable Cloud KMS key; any 2 of 3 offline recovery keys sign a keys document that rotates or revokes it and can raise the trust epoch; revocations are persisted; recovery keys never sign manifests |
 | Updating a running file | Never: versions are side by side and the pointer swap is an atomic rename |
 
-**State today.** The only pinned key is a development key (its public half is in `src/update/keys.ts`; the private half is not in this repository). No production key exists yet, so releases are published **without a manifest** and the updater has nothing to apply. When the production key exists it is added to the pinned list (see [RELEASING.md](RELEASING.md)).
+**State today.** `src/update/keys.ts` pins the production release key `kms-2026a` (a non-exportable Google Cloud KMS Ed25519 key usable only by the release workflow), three offline recovery keys (2 of 3 can rotate or revoke the release key), and a development key that is refused unless explicitly allowed. Signed mode is switched on per repository with the `RELEASE_SIGNING` variable; until the first signed release, releases are published **without a manifest** and the updater has nothing to apply. Details, costs and the threat model: [RELEASING.md](RELEASING.md).
 
 **Launcher.** `current.json` is `{version, previous, knownGood, state, bootCount, trialStarted}`. A freshly staged version runs on **trial**: it is confirmed after the agent's loopback `/healthz` has answered continuously for 60 s, and rolled back automatically (the bad version is denylisted for 7 days) if the agent crashed 3 times within 10 minutes, booted twice without confirming, or is not healthy 120 s after start. Updates exit the agent with code 75 so the launcher restarts into the new version without a crash penalty.
 

@@ -86,6 +86,19 @@ describe('ship look from the website (settings.look)', () => {
   });
 });
 
+describe('ship design (ShipPlan v2) from the website (settings.look with v: 2)', () => {
+  it('is left to the website (it overlays the plan on the public manifest): no local change, no audit, no "invalid" log, v1 looks keep working', async () => {
+    const t = await boot();
+    try {
+      t.setReply({ showRealNames: false, look: { v: 2, pal: 'navy-cyan', bow: 'ring' }, lookAt: '2026-10-14T12:05:00.000Z' });
+      await t.agent.replicator.tick(); await t.settle();
+      expect(t.agent.svc.manifest().plan).toBeUndefined();
+      expect(t.logLines.some((l) => l.includes('ship look'))).toBe(false);
+      expect((t.agent.svc.store.audits(50) as { action: string }[]).some((a) => a.action.startsWith('ship_'))).toBe(false);
+    } finally { await t.agent.stop(); }
+  });
+});
+
 describe('Pause publishing from the website (settings.paused)', () => {
   it('stops sending events but keeps the heartbeat (paused, not offline), then resumes and flushes', async () => {
     const t = await boot();
@@ -127,6 +140,43 @@ describe('Pause publishing from the website (settings.paused)', () => {
       await t.agent.replicator.tick(); await t.settle();
       expect(t.agent.svc.remotePaused).toBe(false);
     } finally { await t.agent.stop(); }
+  });
+});
+
+describe('installation lane', () => {
+  it('sends a random id for THIS installation, stable across restarts of the same data, and never derived from the computer', async () => {
+    const t = await boot();
+    try {
+      await t.agent.replicator.tick();
+      const lane = t.sent[0]!.headers['x-botwarren-lane'];
+      expect(lane).toMatch(/^[a-f0-9]{16}$/);
+      expect(t.agent.svc.store.getSetting('lane_id')).toBe(lane);
+      await t.agent.replicator.tick();
+      expect(t.sent[1]!.headers['x-botwarren-lane']).toBe(lane);
+      expect(JSON.stringify(t.sent[0]!.meta)).not.toContain(lane!);
+    } finally { await t.agent.stop(); }
+    const u = await boot();
+    try { await u.agent.replicator.tick(); expect(u.sent[0]!.headers['x-botwarren-lane']).not.toBe(t.sent[0]!.headers['x-botwarren-lane']); } finally { await u.agent.stop(); } // another installation
+  });
+  it('after a lane reset the cursor never moves backwards (the history is already there); after a plain reset it still follows the server', async () => {
+    const data = tmp(); const logs = tmp();
+    const secretFile = join(data, 'ship.secret'); writeFileSync(secretFile, 'x'.repeat(40));
+    const cfg = resolveConfig({ shipId: 'demo1', replicaUrl: 'https://demo1.botwarren.com', secretFile, opsPort: 47000 + Math.floor(Math.random() * 1000), dataDir: data, harnessLogDirs: [logs], codexLogDirs: [], projects: [{ id: 'demo1', repoPaths: ['/work/game'] }] });
+    let answer: Record<string, unknown> = { maxSeq: 0, laneReset: true, settings: { showRealNames: false } };
+    const fetchImpl = (async () => new Response(JSON.stringify(answer), { status: 200 })) as typeof fetch;
+    const agent = await startAgent(cfg, { log: () => undefined, replicate: false, fetchImpl });
+    try {
+      for (let n = 1; n <= 50; n++) agent.svc.pub.publish({ v: 1, kind: 'feed', occurredAt: '2026-10-14T10:00:00.000Z', certainty: 'observed', demo: false, source: 'herdr', health: 'healthy' } as never, new Date(Date.parse('2026-10-14T10:00:00.000Z') + n).toISOString());
+      agent.svc.store.setSetting('replica_cursor', '40');
+      await agent.replicator.tick();
+      expect(agent.replicator.cursor).toBe(40); // lane reset answered 0: do not resend 40 events of history
+      answer = { maxSeq: 45, laneReset: true, settings: { showRealNames: false } };
+      await agent.replicator.tick();
+      expect(agent.replicator.cursor).toBe(45);
+      answer = { maxSeq: 3, settings: { showRealNames: false } }; // the remote was wiped and refilled: follow it
+      await agent.replicator.tick();
+      expect(agent.replicator.cursor).toBe(3);
+    } finally { await agent.stop(); }
   });
 });
 

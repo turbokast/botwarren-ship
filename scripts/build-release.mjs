@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * Builds a release: per-OS/arch archives (pinned official Node runtime + launcher + app bundle), the silent-update bundle,
- * an UNSIGNED manifest.json, install-index.txt, installers and SHA256SUMS. Signing the manifest is a separate, human step:
- * scripts/release-sign.mjs (the CI never holds the release key).
+ * an UNSIGNED manifest.json, install-index.txt, installers and SHA256SUMS. Signing the manifest is a separate step: scripts/release-sign.mjs
+ * (the release workflow's gated sign-manifest job through Cloud KMS, or the owner's emergency --kms run; this script never holds a key).
  *
  *   node scripts/build-release.mjs [--targets win-x64,mac-arm64,...] [--out dist/release] [--offline] [--no-runtime] [--no-manifest]
  *        [--release] [--require-signing] [--update-pins] [--previous <manifest.json>] [--rollout-bp 10000] [--critical]
@@ -10,10 +10,12 @@
  *
  *  --offline          use only the cached Node archives (apps/shipagent/.cache/node); fails with instructions if missing
  *  --no-runtime       only the update bundle + manifest (development, CI without network); no per-OS archives
+ *  --emit-bundle      with --no-manifest: also write bundle-<version>.zip (the release workflow's sign-manifest job describes it)
+ *  --epoch            trust epoch of the manifest (default: the previous manifest's, else 1)
  *  --no-manifest      archives, installers and SHA256SUMS only: NO update bundle, manifest.json or install-index.txt. This is how
  *                     releases are published until a production release key exists (see docs/RELEASING.md): the agent's updater and the
  *                     one-line installers need a signed manifest, so they stay inert and refuse to install.
- *  --release          refuses to build while a DEV public key is still pinned in src/update/keys.ts
+ *  --release          refuses to build unless a production release key and the 3 offline recovery keys are pinned in src/update/keys.ts
  *  --require-signing  a skipped OS-signing stage (missing credentials / wrong host) is an error
  *  --previous         merge the releases (and blocked / rollbackFrom lists) of an earlier manifest; manifestVersion increases
  *
@@ -24,13 +26,14 @@
  */
 import { build } from 'esbuild';
 import { execFileSync } from 'node:child_process';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { extractTo, writeTarGz, writeZip } from '../src/update/archive.ts';
-import { Manifest, PLATFORMS } from '../src/update/manifest.ts';
-import { PINNED_PUBLIC_KEYS } from '../src/update/keys.ts';
+import { PLATFORMS } from '../src/update/manifest.ts';
+import { PINNED_PUBLIC_KEYS, RECOVERY_THRESHOLD, recoveryKeys, roleOf } from '../src/update/keys.ts';
+import { assembleManifest } from './lib/manifest-build.mjs';
 import { DEFAULT_BASE_URL } from '../src/update/policy.ts';
 import { fetchRuntimes, loadPins } from './lib/node-runtime.mjs';
 import { planSigning, signStage } from './lib/signing.mjs';
@@ -97,7 +100,12 @@ export async function buildRelease(o = {}) {
   const out = resolve(o.out ?? join(root, 'dist', 'release'), version);
   const log = o.log ?? ((m) => console.log(m));
   const installDir = join(root, 'packaging');
-  if (o.release && PINNED_PUBLIC_KEYS.some((k) => k.dev)) throw new Error('refusing --release: a DEV public key is still pinned in src/update/keys.ts. Add the production key(s) and remove the dev key first.');
+  if (o.release) {
+    // release gate: the agent must pin a production release key and the full offline recovery set (the DEV key may stay pinned: it is refused at runtime without the explicit opt-in)
+    const pinned = o.pinnedKeys ?? PINNED_PUBLIC_KEYS;
+    if (!pinned.some((k) => !k.dev && roleOf(k) === 'release')) throw new Error('refusing --release: no production (non-dev) release public key is pinned in src/update/keys.ts');
+    if (recoveryKeys(pinned).length < RECOVERY_THRESHOLD + 1) throw new Error(`refusing --release: fewer than ${RECOVERY_THRESHOLD + 1} recovery public keys are pinned in src/update/keys.ts`);
+  }
   rmSync(out, { recursive: true, force: true });
   mkdirSync(out, { recursive: true });
 
@@ -107,7 +115,7 @@ export async function buildRelease(o = {}) {
 
   const bundleName = `bundle-${version}.zip`;
   const bundleZip = writeZip([...['agent.mjs', 'cli.mjs', 'ops.html'].map((n) => ({ name: n, data: files[n], mode: 0o644 })), { name: 'VERSION', data: Buffer.from(`${version}\n`), mode: 0o644 }]);
-  if (!o.noManifest) writeFileSync(join(out, bundleName), bundleZip);
+  if (!o.noManifest || o.emitBundle) writeFileSync(join(out, bundleName), bundleZip); // --emit-bundle: the reproducible bundle the release workflow's sign-manifest job describes
 
   const pinFile = join(root, 'packaging', 'node-pins.json');
   const nodeVersion = o.nodeVersion ?? loadPins(pinFile)?.version ?? '24.21.0';
@@ -144,40 +152,24 @@ export async function buildRelease(o = {}) {
 
   let manifest = null;
   if (!o.noManifest) {
-    let prev = null;
-    if (o.previous) prev = JSON.parse(readFileSync(o.previous, 'utf8'));
+    const prev = o.previous ? JSON.parse(readFileSync(o.previous, 'utf8')) : null;
     const commit = o.commit ?? (() => { try { return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root }).toString().trim(); } catch { return undefined; } })();
-    const release = {
-      ...(commit && /^[0-9a-f]{7,40}$/.test(commit) ? { commit } : {}),
-      protocol: { min: 1, max: 1 }, rolloutBp: o.rolloutBp ?? 10_000, rolloutSalt: `r${version.replaceAll('.', '-')}-${randomBytes(3).toString('hex')}`, critical: !!o.critical,
-      bundle: { url: bundleName, sha256: sha256(bundleZip), size: bundleZip.length }, full,
-      ...(withRuntime ? { minRuntime: nodeVersion } : {}),
-    };
-    manifest = {
-      schema: 1,
-      manifestVersion: o.manifestVersion ?? Math.max((prev?.manifestVersion ?? 0) + 1, Math.floor(Date.now() / 1000)),
-      issued: new Date().toISOString(),
-      expires: new Date(Date.now() + (o.expiresDays ?? 14) * 86_400_000).toISOString(),
-      channels: { ...(prev?.channels ?? {}), stable: o.stableVersion ?? version },
-      minSupported: prev?.minSupported ?? '0.1.0',
-      blocked: prev?.blocked ?? [], rollbackFrom: prev?.rollbackFrom ?? [],
-      releases: { ...(prev?.releases ?? {}), [version]: release },
-    };
-    Manifest.parse(manifest); // a manifest that our own client would refuse is a build error
-    writeFileSync(join(out, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
-
-    // ---- install index for the shell/PowerShell installers (stable first): "<version> <target> <file> <sha256> <size>"
-    const lines = [];
-    const versions = Object.keys(manifest.releases).sort((a, b) => (a === manifest.channels.stable ? -1 : b === manifest.channels.stable ? 1 : b.localeCompare(a, undefined, { numeric: true })));
-    for (const v of versions) for (const [t, a] of Object.entries(manifest.releases[v].full ?? {})) lines.push(`${v} ${t} ${a.url} ${a.sha256} ${a.size}`);
-    writeFileSync(join(out, 'install-index.txt'), lines.join('\n') + (lines.length ? '\n' : ''));
+    const built = assembleManifest({
+      version, bundle: { url: bundleName, sha256: sha256(bundleZip), size: bundleZip.length }, full, ...(withRuntime ? { minRuntime: nodeVersion } : {}), previous: prev, commit,
+      ...(o.manifestVersion !== undefined ? { manifestVersion: o.manifestVersion } : {}), ...(o.epoch !== undefined ? { epoch: o.epoch } : {}),
+      ...(o.expiresDays !== undefined ? { expiresDays: o.expiresDays } : {}), ...(o.rolloutBp !== undefined ? { rolloutBp: o.rolloutBp } : {}),
+      critical: !!o.critical, ...(o.stableVersion ? { stableVersion: o.stableVersion } : {}),
+    });
+    manifest = built.manifest;
+    writeFileSync(join(out, 'manifest.json'), built.text);
+    writeFileSync(join(out, 'install-index.txt'), built.indexText);
   }
 
   for (const n of ['install.sh', 'install.ps1']) cpSync(join(installDir, n), join(out, n));
   const sums = readdirSync(out).filter((n) => !n.startsWith('.') && n !== 'SHA256SUMS').sort().map((n) => `${sha256(readFileSync(join(out, n)))}  ${n}`);
   writeFileSync(join(out, 'SHA256SUMS'), sums.join('\n') + '\n');
   log(`release ${version} written to ${out}`);
-  if (manifest) log(`next (a human, with the release key): node scripts/release-sign.mjs --key <path> --key-id <id> ${join(out, 'manifest.json')}`);
+  if (manifest) log(`next: sign it (docs/RELEASING.md): node scripts/release-sign.mjs --kms <key version resource> --key-id kms-2026a ${join(out, 'manifest.json')}`);
   else log('no manifest written (--no-manifest): the updater and the one-line installers stay inert for this release');
   return { dir: out, manifest, version };
 }
@@ -191,6 +183,8 @@ function parseArgs(argv) {
     else if (a === '--offline') o.offline = true;
     else if (a === '--no-runtime') o.runtime = false;
     else if (a === '--no-manifest') o.noManifest = true;
+    else if (a === '--emit-bundle') o.emitBundle = true;
+    else if (a === '--epoch') o.epoch = Number(val(i++));
     else if (a === '--release') o.release = true;
     else if (a === '--require-signing') o.requireSigning = true;
     else if (a === '--dry-run-signing') o.dryRunSigning = true;

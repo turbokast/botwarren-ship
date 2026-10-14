@@ -13,10 +13,11 @@ import { decideUpdate, type Channel, type Decision } from './decide.ts';
 import { MAX_MANIFEST_BYTES, type Artifact, type Platform } from './manifest.ts';
 import { PINNED_PUBLIC_KEYS, type PinnedKey } from './keys.ts';
 import { verifyManifest, type VerifyCode } from './verify.ts';
+import { applyKeysDoc, effectiveKeys, MAX_KEYS_DOC_BYTES, verifyKeysDoc } from './trust.ts';
 import { nextCheckAt } from './schedule.ts';
 import {
-  paths, readDenylist, readOrCreateInstallId, readPointer, readUpdateState, writePointer, writeResult, writeUpdateState,
-  type ResultCode,
+  paths, readDenylist, readOrCreateInstallId, readPointer, readTrust, readUpdateState, writePointer, writeResult, writeTrust, writeUpdateState,
+  type ResultCode, type TrustState,
 } from './state.ts';
 
 export type Outcome =
@@ -46,7 +47,8 @@ export interface UpdaterOptions {
 
 const mapVerify: Record<VerifyCode, ResultCode | null> = {
   too_large: 'signature_invalid', bad_signature_file: 'signature_invalid', unknown_key: 'signature_invalid', dev_key_refused: 'signature_invalid',
-  key_expired: 'signature_invalid', bad_signature: 'signature_invalid', malformed: 'signature_invalid', expired: 'manifest_expired', rollback: 'manifest_rollback',
+  key_expired: 'signature_invalid', key_revoked: 'signature_invalid', wrong_key_role: 'signature_invalid', bad_signature: 'signature_invalid', malformed: 'signature_invalid',
+  expired: 'manifest_expired', rollback: 'manifest_rollback', epoch_rollback: 'manifest_rollback', epoch_unknown: 'signature_invalid', version_jump: 'signature_invalid',
 };
 
 const isLoopback = (h: string) => h === 'localhost' || h === '127.0.0.1' || h === '[::1]';
@@ -88,12 +90,35 @@ export class Updater {
     return Buffer.concat(chunks);
   }
 
+  /**
+   * The OPTIONAL keys document (keys.json + keys.json.sig, 2-of-3 recovery signatures; see trust.ts). Absent or invalid means "no change"
+   * (an attacker who can withhold it can only keep the persisted trust). A newer valid one is persisted (unless `dryRun`) and returned.
+   */
+  private async refreshTrust(dryRun: boolean): Promise<TrustState> {
+    const { root } = this.o;
+    const cur = readTrust(root);
+    const kUrl = resolveUrl('keys.json', this.o.baseUrl); const sUrl = resolveUrl('keys.json.sig', this.o.baseUrl);
+    if (!kUrl || !sUrl) return cur;
+    let kb: Buffer; let ks: Buffer;
+    try { [kb, ks] = [await this.get(kUrl, MAX_KEYS_DOC_BYTES), await this.get(sUrl, 4096)]; } catch { return cur; }
+    const v = verifyKeysDoc(kb, ks.toString('utf8'), { pinned: this.o.keys ?? PINNED_PUBLIC_KEYS, now: new Date(this.now) });
+    if (!v.ok) { this.log(`update: keys document refused (${v.code})`); return cur; }
+    const a = applyKeysDoc(cur, v.doc);
+    if (!a.applied) return cur;
+    this.log(`update: keys document ${v.doc.seq} accepted (signed by ${v.signers.join(', ')}; epoch ${a.state.epoch}; ${a.state.revoked.length} revoked)`);
+    if (!dryRun) {
+      writeTrust(root, a.state);
+      if (a.epochRaised) writeUpdateState(root, { ...readUpdateState(root), highestManifestVersion: 0 }); // the version high-water mark is per epoch
+    }
+    return a.state;
+  }
+
   /** One full check (and stage, unless `dryRun`). Records the next scheduled check. */
   async check(opts: { dryRun?: boolean; explicitVersion?: string } = {}): Promise<Outcome> {
     const { root } = this.o;
-    const st = readUpdateState(root);
+    const st0 = readUpdateState(root);
     const done = (failed: boolean, out: Outcome): Outcome => {
-      if (!opts.dryRun) writeUpdateState(root, { ...readUpdateState(root), lastCheckMs: this.now, nextCheckMs: nextCheckAt(this.now, failed ? st.consecutiveFailures + 1 : 0, this.o.rand), consecutiveFailures: failed ? st.consecutiveFailures + 1 : 0 });
+      if (!opts.dryRun) writeUpdateState(root, { ...readUpdateState(root), lastCheckMs: this.now, nextCheckMs: nextCheckAt(this.now, failed ? st0.consecutiveFailures + 1 : 0, this.o.rand), consecutiveFailures: failed ? st0.consecutiveFailures + 1 : 0 });
       return out;
     };
     const base = this.o.baseUrl;
@@ -103,14 +128,20 @@ export class Updater {
     let bytes: Buffer; let sig: Buffer;
     try { [bytes, sig] = [await this.get(mUrl, MAX_MANIFEST_BYTES), await this.get(sUrl, 4096)]; } catch { return done(true, { status: 'error', code: 'download_failed' }); }
 
-    const v = verifyManifest(bytes, sig.toString('utf8'), { keys: this.o.keys ?? PINNED_PUBLIC_KEYS, now: new Date(this.now), allowDev: this.o.allowDevKey === true, highestSeen: st.highestManifestVersion });
+    const trust = await this.refreshTrust(!!opts.dryRun);
+    const st = readUpdateState(root);
+    const highest = trust.epoch > readTrust(root).epoch ? 0 : st.highestManifestVersion; // a dry run does not persist the epoch bump, but decides as if it had
+    const v = verifyManifest(bytes, sig.toString('utf8'), {
+      keys: effectiveKeys(this.o.keys ?? PINNED_PUBLIC_KEYS, trust), now: new Date(this.now), allowDev: this.o.allowDevKey === true,
+      highestSeen: highest, epoch: trust.epoch, revoked: trust.revoked,
+    });
     if (!v.ok) {
       const code = mapVerify[v.code];
       this.log(`update: manifest refused (${v.code})`);
       if (code && !opts.dryRun) writeResult(root, { code, from: this.o.currentVersion, to: this.o.currentVersion, atMs: this.now });
       return done(true, { status: 'error', code: v.code });
     }
-    if (!opts.dryRun && v.manifest.manifestVersion > st.highestManifestVersion) writeUpdateState(root, { ...readUpdateState(root), highestManifestVersion: v.manifest.manifestVersion });
+    if (!opts.dryRun && v.manifest.manifestVersion > highest) writeUpdateState(root, { ...readUpdateState(root), highestManifestVersion: v.manifest.manifestVersion });
 
     const d: Decision = decideUpdate({
       manifest: v.manifest, current: this.o.currentVersion, channel: this.o.channel, installId: readOrCreateInstallId(root),

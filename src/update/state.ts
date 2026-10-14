@@ -6,6 +6,7 @@
  *   <root>/versions/<v>/               immutable, side by side; a running version is never overwritten
  *   <root>/state/install-id            random UUID (rollout bucket input; not hardware derived)
  *   <root>/state/update-state.json     highest manifestVersion ever accepted, last check, failures
+ *   <root>/state/trust.json            persisted trust: keys-document sequence, epoch, revoked key ids, added release keys
  *   <root>/state/denylist.json         versions refused after a failed trial (version -> epoch ms until)
  *   <root>/state/install-receipt.json  how this was installed (standalone | brew | scoop | ...)
  *   <root>/state/last-update-result.json  one outcome record (enum codes only)
@@ -37,6 +38,7 @@ export const paths = (root: string) => ({
   installId: join(root, 'state', 'install-id'),
   updateState: join(root, 'state', 'update-state.json'),
   denylist: join(root, 'state', 'denylist.json'),
+  trust: join(root, 'state', 'trust.json'),
   receipt: join(root, 'state', 'install-receipt.json'),
   lastResult: join(root, 'state', 'last-update-result.json'),
   lock: join(root, 'state', 'launcher.lock'),
@@ -98,6 +100,23 @@ export function readUpdateState(root: string): UpdateState {
   return { highestManifestVersion: n(j?.highestManifestVersion, 0), lastCheckMs: n(j?.lastCheckMs, 0), nextCheckMs: n(j?.nextCheckMs, 0), consecutiveFailures: n(j?.consecutiveFailures, 0) };
 }
 export function writeUpdateState(root: string, s: UpdateState): void { writeJsonAtomic(paths(root).updateState, s); }
+
+/**
+ * Persisted trust (written only after a keys document passed its 2-of-3 recovery-signature check, see trust.ts).
+ * Revocations are PERMANENT: a revoked id is refused even if an old signature by it is replayed later.
+ */
+export interface AddedKey { id: string; spki: string; notAfter?: string }
+export interface TrustState { keysSeq: number; epoch: number; revoked: string[]; added: AddedKey[] }
+export const EMPTY_TRUST: TrustState = { keysSeq: 0, epoch: 1, revoked: [], added: [] };
+export function readTrust(root: string): TrustState {
+  const j = readJson(paths(root).trust) as Partial<TrustState> | null;
+  if (!j || typeof j !== 'object') return { ...EMPTY_TRUST, revoked: [], added: [] };
+  const id = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(v);
+  const int = (v: unknown, d: number) => (typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 1_000_000_000 ? v : d);
+  const added = Array.isArray(j.added) ? j.added.filter((a): a is AddedKey => !!a && id((a as AddedKey).id) && typeof (a as AddedKey).spki === 'string' && /^[A-Za-z0-9+/]{59}=$/.test((a as AddedKey).spki)).slice(0, 16) : [];
+  return { keysSeq: typeof j.keysSeq === 'number' && j.keysSeq >= 0 ? Math.trunc(j.keysSeq) : 0, epoch: int(j.epoch, 1), revoked: Array.isArray(j.revoked) ? [...new Set(j.revoked.filter(id))].slice(0, 256) : [], added };
+}
+export function writeTrust(root: string, t: TrustState): void { writeJsonAtomic(paths(root).trust, t); }
 
 export type InstallMethod = 'standalone' | 'brew' | 'scoop' | 'winget' | 'apt' | 'npm' | 'docker' | 'dev';
 export function readReceiptMethod(root: string): InstallMethod | null {

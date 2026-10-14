@@ -2,15 +2,30 @@ name: Release
 
 # Publishes a release when a `v*` tag is pushed. See docs/RELEASING.md for the full procedure and the one-time setup.
 #
-#   build      no secrets, read-only token: typecheck, tests, then the per-OS archives, install scripts and SHA256SUMS.
-#   reproduce  no secrets: a second, independent build; its SHA256SUMS must equal the first one.
-#   publish    runs in the PROTECTED `release` environment (required reviewer): nothing is attested, uploaded or released until a
-#              reviewer approves. The R2 credentials exist only as secrets of that environment. It attests the artifacts
-#              (GitHub artifact attestations), uploads them to Cloudflare R2 and creates the GitHub Release with the same files.
+#   build         no secrets, read-only token: typecheck, tests, then the per-OS archives, the update bundle, install scripts and SHA256SUMS.
+#   reproduce     no secrets: a second, independent build; its SHA256SUMS must equal the first one.
+#   sign-manifest (only when the repository variable RELEASE_SIGNING is `kms`) runs in the PROTECTED `release` environment. It describes the
+#                 reproducible build output in an update manifest (scripts/assemble-manifest.mjs: it rebuilds nothing), authenticates to Google
+#                 Cloud with GitHub OIDC workload identity federation (NO key file, NO stored credential), signs the manifest with a non-exportable
+#                 Cloud KMS Ed25519 key, and verifies the signature against the public key pinned in src/update/keys.ts before uploading it as
+#                 a workflow artifact. Google only lets this exact repository, workflow file, tag and environment use the key (docs/RELEASING.md).
+#   publish       runs in the PROTECTED `release` environment (required reviewer): nothing is attested, uploaded or released until a reviewer
+#                 approves. The R2 credentials exist only as secrets of that environment. It attests the artifacts (GitHub artifact attestations),
+#                 uploads them to Cloudflare R2 (the signed manifest LAST, when there is one) and creates the GitHub Release.
 #   sign-windows, notarize-macos   DISABLED stubs (`if: false`): see the notes on each job. They are not part of any release yet.
 #
-# NO update manifest is built or signed here. Until a production release key exists (docs/RELEASING.md) releases ship WITHOUT a
-# manifest, so the agent's updater and the one-line installers stay inert. The dev key is never used in CI.
+# Two modes, chosen by the repository variable RELEASE_SIGNING (Settings, Secrets and variables, Variables):
+#   unset    CHECKSUM MODE: no manifest. The updater stays inert and the one-line installers install only on request, in their
+#            checksum-verified mode (install.sh --checksum-only: archive checked against <version>/SHA256SUMS over HTTPS, auto-update disabled).
+#   `kms`    SIGNED MODE: the sign-manifest job runs and the release also publishes manifest.json, manifest.json.sig, install-index.txt and the
+#            update bundle, so the updater and the signed installers work. Checksum mode keeps working beside it.
+# The dev key is never used in CI. If signing is on and sign-manifest fails, nothing is published (fail closed).
+#
+# Repository variables for signed mode (not secrets: they only name public resources; Google enforces who may use them):
+#   RELEASE_SIGNING                 `kms` to switch signed mode on
+#   GCP_WORKLOAD_IDENTITY_PROVIDER  projects/881108236417/locations/global/workloadIdentityPools/github-release/providers/botwarren-ship
+#   GCP_SERVICE_ACCOUNT             release-signer@botwarren-release.iam.gserviceaccount.com
+#   RELEASE_EPOCH                   optional; the trust epoch (default 1), raised by the owner only after a recovery key ceremony
 #
 # Every action is pinned to a full commit SHA (the tag is in the trailing comment). Update them through Dependabot.
 #
@@ -32,6 +47,9 @@ concurrency:
 env:
   R2_BUCKET: botwarren-downloads
   NODE_VERSION: '24'
+  DOWNLOADS_URL: https://downloads.botwarren.com
+  KMS_KEY_VERSION: projects/botwarren-release/locations/europe-west2/keyRings/botwarren-release/cryptoKeys/manifest-signing/cryptoKeyVersions/1
+  KMS_KEY_ID: kms-2026a
 
 jobs:
   build:
@@ -82,10 +100,10 @@ jobs:
       - name: Test
         run: pnpm test
 
-      - name: Build the per-OS archives (no manifest)
+      - name: Build the per-OS archives and the update bundle (no manifest here, the sign-manifest job describes these exact bytes)
         # The Node.js runtimes are downloaded from nodejs.org and must match both its SHASUMS256.txt and the hashes pinned in
         # packaging/node-pins.json. OS signing stages skip themselves (no credentials, wrong host): see the disabled jobs below.
-        run: node scripts/build-release.mjs --no-manifest --out dist/release
+        run: node scripts/build-release.mjs --no-manifest --emit-bundle --out dist/release
 
       - name: List what will be released
         env:
@@ -129,7 +147,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Rebuild
-        run: node scripts/build-release.mjs --no-manifest --out dist/rebuild
+        run: node scripts/build-release.mjs --no-manifest --emit-bundle --out dist/rebuild
 
       - name: Download the first build
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -147,9 +165,108 @@ jobs:
           fi
           echo "the independent rebuild produced identical hashes"
 
+  sign-manifest:
+    name: sign the update manifest (Cloud KMS)
+    needs: [build, reproduce]
+    # Signed mode only (see the header). Job-level `if` can read repository variables, not environment variables.
+    if: ${{ vars.RELEASE_SIGNING == 'kms' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # The protected environment. Its name is part of the OIDC token, and Google's attribute condition requires exactly `release`.
+    environment:
+      name: release
+    permissions:
+      contents: read
+      id-token: write        # the OIDC token that Google exchanges for a short-lived credential: this job and `publish` are the only ones with it
+    steps:
+      - name: Check out the tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install the one runtime dependency (zod) only; no install scripts run
+        run: pnpm install --frozen-lockfile --prod --ignore-scripts
+
+      - name: Download the build output
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-files
+          path: dist
+
+      - name: Verify the downloaded files against SHA256SUMS
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          sha256sum --check SHA256SUMS
+
+      - name: Fetch the previous manifest (to carry older releases and keep the version counter monotonic)
+        run: |
+          set -euo pipefail
+          mkdir -p previous
+          code=$(curl -sS -o previous/manifest.json -w '%{http_code}' "${DOWNLOADS_URL}/manifest.json" || true)
+          if [ "${code}" = "200" ]; then
+            curl -fsS -o previous/manifest.json.sig "${DOWNLOADS_URL}/manifest.json.sig"
+            echo "previous manifest found (it is verified against the pinned keys before use)"
+          elif [ "${code}" = "404" ]; then
+            rm -f previous/manifest.json; echo "no previous manifest: this is the first signed release"
+          else
+            echo "::error::could not fetch the previous manifest (HTTP ${code}); refusing to guess"; exit 1
+          fi
+
+      - name: Assemble the unsigned manifest from the reproducible build output
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          RELEASE_EPOCH: ${{ vars.RELEASE_EPOCH }}
+        run: |
+          set -euo pipefail
+          mkdir -p signed
+          args=(--dir dist --version "${VERSION}" --out signed --commit "${GITHUB_SHA}" --expires-days 30)
+          if [ -f previous/manifest.json ]; then args+=(--previous previous/manifest.json --previous-sig previous/manifest.json.sig); fi
+          if [ -n "${RELEASE_EPOCH:-}" ]; then args+=(--epoch "${RELEASE_EPOCH}"); fi
+          node scripts/assemble-manifest.mjs "${args[@]}"
+
+      - name: Authenticate to Google Cloud (workload identity federation, no key file)
+        id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+          create_credentials_file: false
+          access_token_lifetime: 300s
+
+      - name: Sign the manifest with Cloud KMS (verified against the pinned public key before anything is written)
+        env:
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: node scripts/release-sign.mjs --kms "${KMS_KEY_VERSION}" --key-id "${KMS_KEY_ID}" signed/manifest.json
+
+      - name: Independent check with the agent's own verifier (pinned keys, no opt-in for dev keys)
+        run: |
+          set -euo pipefail
+          node --disable-warning=ExperimentalWarning src/cli.ts verify-release --manifest signed/manifest.json --sig signed/manifest.json.sig
+          { echo '### Signed manifest'; echo '```'; sha256sum signed/*; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the signed manifest for the publish job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signed-manifest
+          path: signed/
+          if-no-files-found: error
+          retention-days: 7
+
   publish:
     name: attest, upload and release
-    needs: [build, reproduce]
+    needs: [build, reproduce, sign-manifest]
+    # Runs in checksum mode (sign-manifest skipped) and in signed mode (sign-manifest succeeded); never when signing was requested and failed.
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.reproduce.result == 'success' && (needs.sign-manifest.result == 'success' || needs.sign-manifest.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # The protected environment: required reviewer, restricted to v* tags. Holds R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ENDPOINT.
@@ -173,13 +290,44 @@ jobs:
           sha256sum --check SHA256SUMS
           ls -l
 
+      - name: Download the signed manifest (signed mode only)
+        if: ${{ needs.sign-manifest.result == 'success' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: signed-manifest
+          path: signed
+
+      - name: Re-check that the signed manifest still matches the build (signed mode only)
+        if: ${{ needs.sign-manifest.result == 'success' }}
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          for f in manifest.json manifest.json.sig install-index.txt; do test -s "signed/$f"; done
+          # every artifact the manifest names must be in dist/ with the hash the manifest states
+          node -e '
+            const fs = require("fs"), c = require("crypto");
+            const m = JSON.parse(fs.readFileSync("signed/manifest.json", "utf8"));
+            const r = m.releases[process.env.VERSION];
+            const items = [r.bundle, ...Object.values(r.full)];
+            for (const a of items) { const h = c.createHash("sha256").update(fs.readFileSync("dist/" + a.url)).digest("hex"); if (h !== a.sha256) { console.error("mismatch: " + a.url); process.exit(1); } }
+            console.log("manifest " + m.manifestVersion + " matches " + items.length + " artifacts");
+          '
+
       - name: Attest build provenance
         id: attest
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-checksums: dist/SHA256SUMS
 
-      - name: Upload to Cloudflare R2 (archives first, then the checksums, the installers last)
+      - name: Attest the signed manifest (signed mode only)
+        id: attest-manifest
+        if: ${{ needs.sign-manifest.result == 'success' }}
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: signed/manifest.json
+
+      - name: Upload to Cloudflare R2 (archives first, then checksums and installers; in signed mode the manifest files, manifest.json LAST; latest.txt at the very end)
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -195,11 +343,30 @@ jobs:
           : "${R2_ENDPOINT:?R2_ENDPOINT is not set in the release environment}"
           put() { aws s3 cp "$1" "s3://${R2_BUCKET}/$2" --endpoint-url "${R2_ENDPOINT}" --cache-control "$3" --only-show-errors; }
           cd dist
+          # <version>/ holds the whole release, immutable: what the checksum-verified installers read (install.sh --checksum-only).
+          for f in botwarren-"${VERSION}"-*; do put "$f" "${VERSION}/$f" "public, max-age=31536000, immutable"; done
+          put SHA256SUMS "${VERSION}/SHA256SUMS" "public, max-age=31536000, immutable"
+          put install.sh "${VERSION}/install.sh" "public, max-age=31536000, immutable"
+          put install.ps1 "${VERSION}/install.ps1" "public, max-age=31536000, immutable"
+          # flat copies: the signed-manifest installers and updater read archives from the bucket root once a manifest exists.
           for f in botwarren-"${VERSION}"-*; do put "$f" "$f" "public, max-age=31536000, immutable"; done
           put SHA256SUMS "SHA256SUMS-${VERSION}" "public, max-age=31536000, immutable"
           put SHA256SUMS "SHA256SUMS" "public, max-age=300"
           put install.sh "install.sh" "public, max-age=300"
           put install.ps1 "install.ps1" "public, max-age=300"
+          # SIGNED MODE: the update bundle and the signed manifest. The index and the signature go before manifest.json, which makes the
+          # release visible to the updater and the signed installers; everything the manifest names is already in the bucket by then.
+          if [ -f "${GITHUB_WORKSPACE}/signed/manifest.json" ]; then
+            put "bundle-${VERSION}.zip" "bundle-${VERSION}.zip" "public, max-age=31536000, immutable"
+            put "${GITHUB_WORKSPACE}/signed/install-index.txt" "install-index.txt" "public, max-age=300"
+            put "${GITHUB_WORKSPACE}/signed/manifest.json.sig" "manifest.json.sig" "public, max-age=300"
+            put "${GITHUB_WORKSPACE}/signed/manifest.json" "manifest.json" "public, max-age=300"
+            echo "uploaded the signed manifest"
+          fi
+          # latest.txt names the newest version for `install.sh --checksum-only` without --version. Uploaded LAST: it makes the release current.
+          # (Not signed: it is as trustworthy as the host. Whoever can change it can already change the archives; see the README.)
+          printf '%s\n' "${VERSION}" > "${RUNNER_TEMP}/latest.txt"
+          put "${RUNNER_TEMP}/latest.txt" "latest.txt" "public, max-age=300"
           echo "uploaded ${VERSION} to ${R2_BUCKET}"
 
       - name: Create the GitHub Release with the same files
@@ -208,9 +375,14 @@ jobs:
           TAG: ${{ github.ref_name }}
           VERSION: ${{ needs.build.outputs.version }}
           ATTESTATION_BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+          MANIFEST_ATTESTATION_BUNDLE: ${{ steps.attest-manifest.outputs.bundle-path }}
         run: |
           set -euo pipefail
           cp "${ATTESTATION_BUNDLE}" "dist/attestations-${VERSION}.sigstore.jsonl"
+          if [ -f signed/manifest.json ]; then
+            cp signed/manifest.json signed/manifest.json.sig signed/install-index.txt dist/
+            cp "${MANIFEST_ATTESTATION_BUNDLE}" "dist/attestations-manifest-${VERSION}.sigstore.jsonl"
+          fi
           flags=(--verify-tag --generate-notes --title "Botwarren ship agent ${VERSION}")
           case "${VERSION}" in 0.*) flags+=(--prerelease) ;; esac
           gh release create "${TAG}" dist/* "${flags[@]}" --repo "${GITHUB_REPOSITORY}"

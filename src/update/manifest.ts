@@ -41,7 +41,13 @@ export type Release = z.infer<typeof Release>;
 
 export const Manifest = z.object({
   schema: z.literal(1),
-  /** strictly monotonic; a manifest older than the highest one ever seen is refused (rollback/freeze protection) */
+  /**
+   * Trust epoch. Must equal the epoch the agent currently trusts (raised only by a recovery-signed keys document, see trust.ts).
+   * Lets the recovery keys recover from a compromised or revoked release key: manifests of an older epoch are refused, and
+   * the per-epoch `manifestVersion` high-water mark starts again at 0.
+   */
+  epoch: z.number().int().min(1).max(10_000).default(1),
+  /** strictly monotonic within an epoch; a manifest older than the highest one ever seen is refused (rollback/freeze protection) */
   manifestVersion: z.number().int().min(1),
   issued: z.string().datetime({ offset: true }),
   expires: z.string().datetime({ offset: true }),
@@ -57,6 +63,12 @@ export const Manifest = z.object({
 export type Manifest = z.infer<typeof Manifest>;
 
 export const MAX_MANIFEST_BYTES = 1024 * 1024;
+/**
+ * What the release signer will sign: Cloud KMS signs at most 64 KiB (65,536 bytes) per Ed25519 call and the signed message is the
+ * 22-byte domain prefix plus the manifest, so the manifest must stay under 65,514 bytes. Below that with headroom; prune old
+ * `releases` entries if a manifest ever approaches it (the build refuses to write a bigger one).
+ */
+export const MAX_SIGNABLE_MANIFEST_BYTES = 64_000;
 
 /** `${process.platform}-${process.arch}` -> manifest platform key, or null when unsupported. */
 export function platformKey(platform: string = process.platform, arch: string = process.arch): Platform | null {

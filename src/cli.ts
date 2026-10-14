@@ -8,6 +8,8 @@ import { makePoster, runWrapped } from './runner.ts';
 import { hostname } from 'node:os';
 import { sha } from './events.ts';
 import { runLogin } from './login.ts';
+import { runPair } from './pair.ts';
+import { configPath } from './paths.ts';
 import { runAdapters } from './adapters/cli.ts';
 import { runUpdate, runVerifyRelease } from './update/cli.ts';
 import { VERSION } from './version.ts';
@@ -18,6 +20,7 @@ const USAGE = `botwarren - Botwarren ship agent CLI
   botwarren status                                             is the ship agent running? what is it publishing?
   botwarren ops [--show-token]                                 where your private local ops room is
   botwarren pause | resume                                     emergency stop / resume of public publishing
+  botwarren pair [--repo <folder>] [--no-open]                 connect this computer to your ship (shows a code, you approve it on botwarren.com)
   botwarren login [--no-open]                                  sign in to botwarren.com as owner of your ship (e.g. to make it private)
   botwarren adapters [explain|enable|disable <id>]             which tools Botwarren can see, and what each reads
   botwarren update [status|--dry-run|--version X]              check for / apply a signed update (automatic by default)
@@ -39,11 +42,16 @@ async function api(cfg: ShipConfig, method: 'GET' | 'POST', route: string, body?
 
 async function main(argv: string[]): Promise<number> {
   const [cmd, ...rest] = argv;
+  const setUp = existsSync(process.env.BOTWARREN_SHIP_CONFIG ?? configPath());
+  // first run: nothing is set up yet, so a bare `botwarren` in a terminal starts pairing instead of printing help
+  if (!cmd && !setUp && process.stdin.isTTY === true) { process.stdout.write('Welcome! This computer is not connected to a ship yet, so let\u2019s do that now.\n\n'); return runPair([]); }
   if (!cmd || cmd === '--help' || cmd === '-h' || cmd === 'help') { process.stdout.write(USAGE); return 0; }
   if (cmd === '--version' || cmd === '-v' || cmd === 'version') { process.stdout.write(`botwarren ship agent ${VERSION}\n`); return 0; }
+  if (cmd === 'pair') return runPair(rest);
   // these work before the ship is configured (installers call them first)
   if (cmd === 'verify-release') return runVerifyRelease(rest);
   if (cmd === 'update') return runUpdate(rest);
+  if (!setUp && ['run', 'status', 'ops', 'pause', 'resume', 'login'].includes(cmd)) { process.stderr.write('This computer is not connected to a ship yet. Run:  botwarren pair\n'); return 1; }
   const cfg = loadConfig();
   switch (cmd) {
     case 'run': {

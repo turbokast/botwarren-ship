@@ -16,6 +16,9 @@ const APPLIED = 'cloud_look_applied';
 /** Applies `settings.look` if it changed since last time. Returns what happened (for the log and tests). */
 export function applyCloudLook(svc: Pick<PrivateService, 'store' | 'setLook'>, settings: ReplicaSettings | null): 'none' | 'unchanged' | 'applied' | 'reset' | 'rejected' {
   if (!settings || settings.look === undefined) return 'none';
+  // a ShipPlan v2 (the Refit layout, from the website's Builder) is applied by the website itself: it overlays the plan on this ship's public
+  // manifest, so the agent has nothing to do (and must not treat it as an invalid v1 look). Only HQ's own service applies plans locally.
+  if (settings.look && typeof settings.look === 'object' && (settings.look as { v?: unknown }).v === 2) return 'none';
   const key = settings.look === null ? 'null' : JSON.stringify(settings.look);
   if (svc.store.getSetting(APPLIED) === key) return 'unchanged';
   let look: ShipLook | null = null;

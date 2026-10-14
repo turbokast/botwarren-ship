@@ -23,8 +23,18 @@ import { heartbeat, sha } from './events.ts';
 import { readShipSecret } from './secret.ts';
 import { buildManifest, wantsRealNames } from './names.ts';
 import { applyCloudLook } from './cloud.ts';
+import { applyOnboardingDelay } from './onboarding.ts';
 import { VERSION } from './version.ts';
 import { startUpdateService } from './update/service.ts';
+
+/** A random id for THIS installation, kept in its private settings (it is not derived from anything about the computer). */
+export function laneId(svc: { store: { getSetting(k: string): string | undefined; setSetting(k: string, v: string): void } }): string {
+  const have = svc.store.getSetting('lane_id');
+  if (have && /^[a-f0-9]{8,32}$/.test(have)) return have;
+  const id = randomBytes(8).toString('hex');
+  svc.store.setSetting('lane_id', id);
+  return id;
+}
 
 /** Reads a secret file, or creates a random one (0600; Windows ACLs are set by the installer). Never logged. */
 export function ensureSecretFile(path: string): string {
@@ -79,11 +89,19 @@ export async function startAgent(cfg: ShipConfig, opts: { log?: (m: string) => v
   });
 
   svc.start();
+  // first minutes after pairing: the 30 s minimum delay, so the first crew member shows up fast; then the configured delay again
+  const timers: NodeJS.Timeout[] = [];
+  const onboarding = () => {
+    const left = applyOnboardingDelay(svc, cfg, Date.now());
+    if (left !== null) { const t = setTimeout(onboarding, Math.min(left + 1000, 2_147_000_000)); t.unref(); timers.push(t); log(`new ship: publishing with a ${svc.delaySeconds}s delay for about ${Math.ceil(left / 60_000)} more minute(s), then ${cfg.delaySeconds}s`); }
+  };
+  onboarding();
   let showRealNames = false;
   let lookRejected: string | null = null;
   const replicator: Replicator = new Replicator({
     url: publishUrl(cfg.replicaUrl), secret, publicDbPath: paths.publicDb, store: svc.store, ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
-    headers: { 'x-botwarren-agent': VERSION },
+    // this installation's own id: when it changes (a new computer, a reinstall) the server starts a new sequence lane instead of skipping its events
+    headers: { 'x-botwarren-agent': VERSION, 'x-botwarren-lane': laneId(svc) },
     // "Pause publishing" on the website: send the heartbeat but no new events while it is on
     holdEvents: () => svc.remotePaused,
     // owner-controlled: real names only while the server says so; silence or any other answer = safe names, republished at once
@@ -117,7 +135,6 @@ export async function startAgent(cfg: ShipConfig, opts: { log?: (m: string) => v
   let lastActivityAt = 0;
   const ingest = (events: CanonicalEventInput[]) => { if (events.length) { svc.ingest(events); if (events.some((e) => e.type !== 'collector.heartbeat')) lastActivityAt = Date.now(); } };
 
-  const timers: NodeJS.Timeout[] = [];
   let scanning = false;
   const scan = async () => {
     if (scanning) return; scanning = true;

@@ -15,7 +15,8 @@ import { NinoxAdapter } from '../../src/adapters/ninox.ts';
 import { OpenCodeAdapter } from '../../src/adapters/opencode.ts';
 import { GeminiCliAdapter, projectHash } from '../../src/adapters/gemini.ts';
 import { line, writeCodex, writeSession } from '../helpers.ts';
-import { CANARY_CONTENT, CANARY_PATH, assertNoLeak, fakeHerdr, fakeHttp, linuxHost, makeHost, mkTmp, rmTmp } from './kit.ts';
+import type { Host } from '../../src/paths.ts';
+import { CANARY_CONTENT, CANARY_PATH, assertNoLeak, fakeHerdr, fakeHttp, herdrHost, linuxHost, makeHost, mkTmp, rmTmp } from './kit.ts';
 
 const NOW = new Date('2026-10-14T12:00:00.000Z');
 const at = (s: number) => new Date(NOW.getTime() + s * 1000);
@@ -27,7 +28,7 @@ const cleanup: (() => Promise<void> | void)[] = [];
 beforeEach(() => { process.env.CANARY_ENV_SECRET = CANARY_CONTENT; process.env.ANTHROPIC_API_KEY = CANARY_CONTENT; });
 afterEach(async () => { delete process.env.CANARY_ENV_SECRET; delete process.env.ANTHROPIC_API_KEY; for (const c of cleanup.splice(0)) await c(); });
 
-interface Scenario { name: string; build: (home: string) => Promise<{ adapters: Adapter[]; settings?: { port?: number }; step?: (n: number) => void }> }
+interface Scenario { name: string; build: (home: string) => Promise<{ adapters: Adapter[]; settings?: { port?: number }; step?: (n: number) => void; host?: (env: Record<string, string | undefined>) => Host }> }
 
 const claudeLog = (cwd: string, n: number) => {
   let s = '';
@@ -71,9 +72,10 @@ const scenarios: Scenario[] = [
         cwd: REPO, pane_id: 'p1', terminal_title_stripped: `fix bug ${CANARY_CONTENT}`, screen: CANARY_CONTENT, env: { KEY: CANARY_CONTENT }, history: [CANARY_CONTENT],
       }]);
       cleanup.push(srv.close);
-      const a = new HerdrAdapter(linuxHost(home));
+      const dir = join(home, '.config', 'herdr');
+      const a = new HerdrAdapter(herdrHost(home, dir));
       cleanup.push(() => a.stop());
-      return { adapters: [a] };
+      return { adapters: [a], host: (env) => herdrHost(home, dir, env) };
     },
   },
   {
@@ -121,7 +123,7 @@ describe('canary redaction: no adapter lets a secret reach an event, a public pr
       const b = await sc.build(home);
       const { host, logs } = makeHost({
         adapters: b.adapters.map((adapter) => ({ adapter, ...(b.settings ? { settings: b.settings } : {}) })),
-        host: linuxHost(home, { CANARY_ENV: CANARY_CONTENT }), projects,
+        host: b.host ? b.host({ CANARY_ENV: CANARY_CONTENT }) : linuxHost(home, { CANARY_ENV: CANARY_CONTENT }), projects,
       });
       const all: CanonicalEventInput[] = [];
       all.push(...await host.tick(NOW));

@@ -29,7 +29,7 @@ export function makeBundle(version: string, files: Record<string, string> = {}):
 
 export interface ReleaseSpec { version: string; bundle?: Buffer; rolloutBp?: number; critical?: boolean; salt?: string; protocol?: { min: number; max: number } }
 
-export function makeManifest(o: { manifestVersion?: number; expires?: string; stable: string; minSupported?: string; blocked?: string[]; rollbackFrom?: { from: string; to: string }[]; releases: ReleaseSpec[]; urlBase?: string }): { manifest: Manifest; bundles: Map<string, Buffer> } {
+export function makeManifest(o: { epoch?: number; manifestVersion?: number; expires?: string; stable: string; minSupported?: string; blocked?: string[]; rollbackFrom?: { from: string; to: string }[]; releases: ReleaseSpec[]; urlBase?: string }): { manifest: Manifest; bundles: Map<string, Buffer> } {
   const bundles = new Map<string, Buffer>();
   const releases: Manifest['releases'] = {};
   for (const r of o.releases) {
@@ -41,7 +41,7 @@ export function makeManifest(o: { manifestVersion?: number; expires?: string; st
   return {
     bundles,
     manifest: {
-      schema: 1, manifestVersion: o.manifestVersion ?? 1, issued: '2026-10-14T00:00:00.000Z', expires: o.expires ?? '2026-10-28T00:00:00.000Z',
+      schema: 1, epoch: o.epoch ?? 1, manifestVersion: o.manifestVersion ?? 1, issued: '2026-10-14T00:00:00.000Z', expires: o.expires ?? '2026-10-28T00:00:00.000Z',
       channels: { stable: o.stable }, minSupported: o.minSupported ?? '0.1.0', blocked: o.blocked ?? [], rollbackFrom: o.rollbackFrom ?? [], releases,
     },
   };

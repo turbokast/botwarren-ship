@@ -7,6 +7,8 @@ import { readFileSync } from 'node:fs';
 import { loadConfig } from '../config.ts';
 import { VERSION } from '../version.ts';
 import { PINNED_PUBLIC_KEYS } from './keys.ts';
+import { applyKeysDoc, effectiveKeys, verifyKeysDoc } from './trust.ts';
+import { EMPTY_TRUST } from './state.ts';
 import { Platform, platformKey } from './manifest.ts';
 import { resolvePolicy, type Policy, type UpdatesConfig } from './policy.ts';
 import { readPointer, readResult, readUpdateState } from './state.ts';
@@ -78,11 +80,23 @@ export async function runVerifyRelease(args: string[], deps: UpdateCliDeps = {})
   const err = deps.err ?? ((s: string) => process.stderr.write(s));
   const opt = (n: string): string | undefined => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : undefined; };
   const mf = opt('--manifest'); const sf = opt('--sig');
-  if (!mf || !sf) { err('usage: botwarren verify-release --manifest <file> --sig <file> [--archive-sha256 <hash> --platform <p>] [--allow-dev]\n'); return 2; }
+  if (!mf || !sf) { err('usage: botwarren verify-release --manifest <file> --sig <file> [--keys <keys.json> --keys-sig <file>] [--archive-sha256 <hash> --platform <p>] [--allow-dev]\n'); return 2; }
   let bytes: Buffer; let sig: string;
   try { bytes = readFileSync(mf); sig = readFileSync(sf, 'utf8'); } catch { err('cannot read the manifest or signature file\n'); return 2; }
   const allowDev = args.includes('--allow-dev') || (deps.env ?? process.env).BOTWARREN_UPDATE_ALLOW_DEV_KEY === '1';
-  const v = verifyManifest(bytes, sig, { keys: deps.keys ?? PINNED_PUBLIC_KEYS, now: new Date(), allowDev, highestSeen: 0 });
+  // Optional keys document (recovery-signed, 2 of 3): applied to a fresh trust state, exactly as a first agent check would.
+  const pinned = deps.keys ?? PINNED_PUBLIC_KEYS;
+  let trust = { ...EMPTY_TRUST, revoked: [] as string[], added: [] as typeof EMPTY_TRUST.added };
+  const kf = opt('--keys'); const ksf = opt('--keys-sig');
+  if (kf && ksf) {
+    let kb: Buffer; let ks: string;
+    try { kb = readFileSync(kf); ks = readFileSync(ksf, 'utf8'); } catch { err('cannot read the keys document or its signature file\n'); return 2; }
+    const kv = verifyKeysDoc(kb, ks, { pinned, now: new Date() });
+    if (!kv.ok) { err(`release verification FAILED (keys document: ${kv.code})\n`); return 1; }
+    const a = applyKeysDoc(trust, kv.doc);
+    if (a.applied) trust = a.state;
+  }
+  const v = verifyManifest(bytes, sig, { keys: effectiveKeys(pinned, trust), now: new Date(), allowDev, highestSeen: 0, epoch: trust.epoch, revoked: trust.revoked });
   if (!v.ok) { err(`release verification FAILED (${v.code})\n`); return 1; }
   const sha = opt('--archive-sha256'); const plat = opt('--platform');
   if (sha || plat) {

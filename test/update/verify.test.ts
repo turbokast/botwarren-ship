@@ -80,9 +80,11 @@ describe('manifest verification', () => {
     expect(verifyManifest(Buffer.alloc(2 * 1024 * 1024), '{}', opts())).toEqual({ ok: false, code: 'too_large' });
   });
 
-  it('the embedded key list is well-formed (SPKI Ed25519) and the only key right now is the DEV key', () => {
+  it('the embedded key list is well-formed (SPKI Ed25519); dev keys stay flagged and are never the only trust anchor', () => {
     expect(PINNED_PUBLIC_KEYS.length).toBeGreaterThan(0);
     for (const k of PINNED_PUBLIC_KEYS) expect(Buffer.from(k.spki, 'base64')).toHaveLength(44);
-    expect(PINNED_PUBLIC_KEYS.every((k) => k.dev)).toBe(true); // flips to false when production keys are added (release-gate script checks)
+    expect(PINNED_PUBLIC_KEYS.filter((k) => k.dev).every((k) => k.id.startsWith('dev-'))).toBe(true);
+    expect(PINNED_PUBLIC_KEYS.some((k) => !k.dev)).toBe(true); // production keys are pinned (details: trust.test.ts)
   });
+
 });

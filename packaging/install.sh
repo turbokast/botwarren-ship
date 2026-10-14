@@ -16,9 +16,20 @@
 # Trust note: steps 1-2 rest on TLS to the download host; the signature check in step 3 is what binds the archive to the
 # release key. Prefer not to pipe to sh? Download this file, read it, then run it.
 #
+# CHECKSUM-VERIFIED MODE (--checksum-only), for releases that have no signed update manifest (the case until the production
+# release key exists; see docs/RELEASING.md). It never falls back to this by itself: you ask for it.
+#   curl -fsSL https://downloads.botwarren.com/install.sh | sh -s -- --checksum-only --version 0.5.0
+#   curl -fsSL https://downloads.botwarren.com/install.sh | sh -s -- --checksum-only            (newest, from latest.txt)
+# It downloads <base>/<version>/SHA256SUMS over HTTPS, checks the archive against it, lists the archive and refuses unsafe paths,
+# then installs. This is weaker than the signed path: an attacker who controls the download host could change the archive AND its
+# checksum, so nothing here binds the file to a release key. You can compare the same hash with the GitHub Release and its build
+# provenance attestation (`gh attestation verify`, see README). Auto-update is DISABLED for such an install until a signed
+# manifest exists (the updater has nothing signed to fetch, so it never runs unsigned code).
+#
 # Options (or the matching environment variables):
 #   --base-url URL    BOTWARREN_BASE_URL     download base (default https://downloads.botwarren.com)
-#   --version X.Y.Z   BOTWARREN_VERSION      install that version instead of the stable one
+#   --version X.Y.Z   BOTWARREN_VERSION      install that version instead of the stable one ("latest" = newest published)
+#   --checksum-only   BOTWARREN_CHECKSUM_ONLY=1  no signed manifest: verify against <base>/<version>/SHA256SUMS (see above)
 #   --install-dir D   BOTWARREN_INSTALL_DIR  default ~/.local/share/botwarren
 #   --bin-dir D       BOTWARREN_BIN_DIR      default ~/.local/bin
 #   --no-service      BOTWARREN_NO_SERVICE=1 do not register or start the background service
@@ -32,6 +43,8 @@ set -eu
 main() {
   BASE_URL="${BOTWARREN_BASE_URL:-https://downloads.botwarren.com}"
   VERSION="${BOTWARREN_VERSION:-}"
+  CHECKSUM_ONLY=0
+  [ "${BOTWARREN_CHECKSUM_ONLY:-0}" = 1 ] && CHECKSUM_ONLY=1
   ROOT="${BOTWARREN_INSTALL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/botwarren}"
   BIN_DIR="${BOTWARREN_BIN_DIR:-$HOME/.local/bin}"
   WANT_SERVICE=1
@@ -47,19 +60,24 @@ main() {
       --version) [ $# -ge 2 ] || usage_error "--version needs a value"; VERSION=$2; shift ;;
       --install-dir) [ $# -ge 2 ] || usage_error "--install-dir needs a value"; ROOT=$2; shift ;;
       --bin-dir) [ $# -ge 2 ] || usage_error "--bin-dir needs a value"; BIN_DIR=$2; shift ;;
+      --checksum-only) CHECKSUM_ONLY=1 ;;
       --no-service) WANT_SERVICE=0 ;;
       --linger) LINGER=yes ;;
       --no-linger) LINGER=no ;;
       --dry-run) DRY_RUN=1 ;;
       --print-service) PRINT_SERVICE=1 ;;
       --print-service=*) PRINT_SERVICE=1; PRINT_KIND=${1#*=} ;;
-      -h|--help) sed -n '2,32p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
+      -h|--help) sed -n '2,42p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
       *) usage_error "unknown option: $1" ;;
     esac
     shift
   done
 
   BASE_URL=${BASE_URL%/}
+  [ "$VERSION" = latest ] && VERSION=
+  if [ -n "$VERSION" ]; then
+    case "$VERSION" in *[!0-9.]*) die "--version must look like 1.2.3 (or latest)" ;; esac
+  fi
   case "$BASE_URL" in
     https://*) ;;
     http://127.0.0.1*|http://localhost*|http://\[::1\]*) ;;
@@ -104,30 +122,54 @@ main() {
   say "  command     : $BIN_DIR/botwarren"
   say "  service     : $SERVICE_KIND"
   say "  downloads   : $BASE_URL"
+  if [ "$CHECKSUM_ONLY" = 1 ]; then say "  verification: SHA256SUMS over HTTPS only (no signed manifest); auto-update will be DISABLED"; else say "  verification: signed release manifest"; fi
   if [ "$DRY_RUN" = 1 ]; then say "dry run: nothing was downloaded or changed."; return 0; fi
 
   TMP=$(mktemp -d "${TMPDIR:-/tmp}/botwarren-install.XXXXXX")
   trap 'rm -rf "$TMP"' EXIT INT TERM HUP
 
   step "Looking up the release"
-  fetch "$BASE_URL/install-index.txt" "$TMP/install-index.txt"
-  LINE=$(awk -v v="$VERSION" -v t="$TARGET" '$2 == t && (v == "" || $1 == v) { print; exit }' "$TMP/install-index.txt")
-  [ -n "$LINE" ] || die "no release found for $TARGET${VERSION:+ version $VERSION}"
-  # shellcheck disable=SC2086
-  set -- $LINE
-  NEW_VERSION=$1; FILE=$3; SHA=$4; SIZE=$5
-  case "$NEW_VERSION" in *[!0-9.]*|'') die "bad version in the index" ;; esac
-  case "$FILE" in */*|*..*|'') die "bad file name in the index" ;; esac
+  SIZE=
+  if [ "$CHECKSUM_ONLY" = 1 ]; then
+    # no signed manifest: the version is explicit (or read from latest.txt) and the hash comes from <base>/<version>/SHA256SUMS
+    if [ -n "$VERSION" ]; then NEW_VERSION=$VERSION
+    else
+      fetch "$BASE_URL/latest.txt" "$TMP/latest.txt"
+      NEW_VERSION=$(head -n 1 "$TMP/latest.txt" | tr -d ' \r\n')
+    fi
+    case "$NEW_VERSION" in [0-9]*.[0-9]*.[0-9]*) ;; *) die "bad version (expected 1.2.3, got: $NEW_VERSION)" ;; esac
+    case "$NEW_VERSION" in *[!0-9.]*|*..*|*.) die "bad version: $NEW_VERSION" ;; esac
+    fetch "$BASE_URL/$NEW_VERSION/SHA256SUMS" "$TMP/SHA256SUMS"
+    FILE="botwarren-$NEW_VERSION-$TARGET.tar.gz"
+    SHA=$(awk -v f="$FILE" '$2 == f || $2 == "*" f { print $1; exit }' "$TMP/SHA256SUMS")
+    [ -n "$SHA" ] || die "SHA256SUMS for $NEW_VERSION does not list $FILE"
+    FILE_URL="$BASE_URL/$NEW_VERSION/$FILE"
+  else
+    if ! fetch_try "$BASE_URL/install-index.txt" "$TMP/install-index.txt"; then
+      die "this release has no signed update manifest yet (could not download $BASE_URL/install-index.txt). Nothing was installed.
+To install a release that is verified only against its published SHA-256 checksums (auto-update stays off), run again with --checksum-only [--version X.Y.Z]. See the README, section Install."
+    fi
+    LINE=$(awk -v v="$VERSION" -v t="$TARGET" '$2 == t && (v == "" || $1 == v) { print; exit }' "$TMP/install-index.txt")
+    [ -n "$LINE" ] || die "no release found for $TARGET${VERSION:+ version $VERSION}"
+    # shellcheck disable=SC2086
+    set -- $LINE
+    NEW_VERSION=$1; FILE=$3; SHA=$4; SIZE=$5
+    case "$NEW_VERSION" in *[!0-9.]*|'') die "bad version in the index" ;; esac
+    case "$FILE" in */*|*..*|'') die "bad file name in the index" ;; esac
+    FILE_URL="$BASE_URL/$FILE"
+  fi
   case "$SHA" in *[!0-9a-f]*) die "bad checksum in the index" ;; esac
   [ ${#SHA} -eq 64 ] || die "bad checksum length in the index"
   say "  version $NEW_VERSION"
 
   step "Downloading $FILE"
-  fetch "$BASE_URL/$FILE" "$TMP/$FILE"
-  GOT_SIZE=$(wc -c < "$TMP/$FILE" | tr -d ' ')
-  [ "$GOT_SIZE" = "$SIZE" ] || die "size mismatch (expected $SIZE bytes, got $GOT_SIZE)"
+  fetch "$FILE_URL" "$TMP/$FILE"
+  if [ -n "$SIZE" ]; then
+    GOT_SIZE=$(wc -c < "$TMP/$FILE" | tr -d ' ')
+    [ "$GOT_SIZE" = "$SIZE" ] || die "size mismatch (expected $SIZE bytes, got $GOT_SIZE)"
+  fi
   GOT_SHA=$(sha256_of "$TMP/$FILE")
-  [ "$GOT_SHA" = "$SHA" ] || die "checksum mismatch: the download is not what the index says. Nothing was installed."
+  [ "$GOT_SHA" = "$SHA" ] || die "checksum mismatch: the download is not what the published hash says. Nothing was installed."
   say "  checksum ok"
 
   step "Checking the archive"
@@ -139,12 +181,28 @@ main() {
   [ -x "$NODE_NEW" ] || die "the archive has no runtime"
   [ -f "$TMP/x/versions/$NEW_VERSION/cli.mjs" ] || die "the archive has no version $NEW_VERSION"
 
-  step "Verifying the signed release manifest"
-  fetch "$BASE_URL/manifest.json" "$TMP/manifest.json"
-  fetch "$BASE_URL/manifest.json.sig" "$TMP/manifest.json.sig"
-  "$NODE_NEW" --disable-warning=ExperimentalWarning "$TMP/x/versions/$NEW_VERSION/cli.mjs" verify-release \
-    --manifest "$TMP/manifest.json" --sig "$TMP/manifest.json.sig" --archive-sha256 "$SHA" --platform "$TARGET" --version "$NEW_VERSION" \
-    || die "the release signature check failed. Nothing was installed."
+  if [ "$CHECKSUM_ONLY" = 1 ]; then
+    say "  NOTE: no signed release manifest was checked. This archive was verified only against the SHA256SUMS published at"
+    say "        $BASE_URL/$NEW_VERSION/ over HTTPS. Auto-update is DISABLED for this install until a signed manifest exists."
+    VERIFICATION=sha256sums
+  else
+    step "Verifying the signed release manifest"
+    fetch "$BASE_URL/manifest.json" "$TMP/manifest.json"
+    fetch "$BASE_URL/manifest.json.sig" "$TMP/manifest.json.sig"
+    # the optional keys document (recovery-signed rotation/revocation, see docs/RELEASING.md): present only after a key change
+    rm -f "$TMP/keys.json" "$TMP/keys.json.sig"
+    if fetch_try "$BASE_URL/keys.json" "$TMP/keys.json" && fetch_try "$BASE_URL/keys.json.sig" "$TMP/keys.json.sig"; then
+      "$NODE_NEW" --disable-warning=ExperimentalWarning "$TMP/x/versions/$NEW_VERSION/cli.mjs" verify-release \
+        --manifest "$TMP/manifest.json" --sig "$TMP/manifest.json.sig" --keys "$TMP/keys.json" --keys-sig "$TMP/keys.json.sig" \
+        --archive-sha256 "$SHA" --platform "$TARGET" --version "$NEW_VERSION" \
+        || die "the release signature check failed. Nothing was installed."
+    else
+      "$NODE_NEW" --disable-warning=ExperimentalWarning "$TMP/x/versions/$NEW_VERSION/cli.mjs" verify-release \
+        --manifest "$TMP/manifest.json" --sig "$TMP/manifest.json.sig" --archive-sha256 "$SHA" --platform "$TARGET" --version "$NEW_VERSION" \
+        || die "the release signature check failed. Nothing was installed."
+    fi
+    VERIFICATION=signed-manifest
+  fi
 
   step "Installing"
   OLD_VERSION=""
@@ -166,14 +224,14 @@ main() {
   cp "$TMP/x/uninstall.sh" "$ROOT/uninstall.sh" && chmod 755 "$ROOT/uninstall.sh"
   NODE="$ROOT/runtime/node/node"
   # pointer: a fresh install is stable; an upgrade over a different version starts in TRIAL (the launcher confirms or rolls back)
-  BW_ROOT="$ROOT" BW_NEW="$NEW_VERSION" BW_OLD="$OLD_VERSION" "$NODE" -e '
+  BW_ROOT="$ROOT" BW_NEW="$NEW_VERSION" BW_OLD="$OLD_VERSION" BW_VERIFY="$VERIFICATION" "$NODE" -e '
     const fs = require("fs"), p = process.env.BW_ROOT + "/current.json", nv = process.env.BW_NEW, ov = process.env.BW_OLD;
     let old = null; try { old = JSON.parse(fs.readFileSync(p, "utf8")); } catch {}
     const next = (ov && ov !== nv)
       ? { version: nv, previous: ov, knownGood: (old && old.knownGood) || ov, state: "trial", bootCount: 0, trialStarted: null }
       : (old && old.version === nv ? old : { version: nv, previous: null, knownGood: nv, state: "stable", bootCount: 0, trialStarted: null });
     fs.writeFileSync(p + ".tmp", JSON.stringify(next, null, 2) + "\n", { mode: 0o644 }); fs.renameSync(p + ".tmp", p);
-    fs.writeFileSync(process.env.BW_ROOT + "/state/install-receipt.json", JSON.stringify({ method: "standalone", installedAt: new Date().toISOString(), version: nv }) + "\n", { mode: 0o600 });
+    fs.writeFileSync(process.env.BW_ROOT + "/state/install-receipt.json", JSON.stringify({ method: "standalone", installedAt: new Date().toISOString(), version: nv, verification: process.env.BW_VERIFY }) + "\n", { mode: 0o600 });
   '
   umask 022
   cat > "$BIN_DIR/botwarren.new" <<SH
@@ -190,6 +248,7 @@ SH
 
   say ""
   say "Botwarren $NEW_VERSION is installed."
+  if [ "$CHECKSUM_ONLY" = 1 ]; then say "Auto-update is DISABLED for this install (no signed update manifest exists yet). Verified: SHA-256 over HTTPS. To update, run this installer again."; fi
   case ":$PATH:" in *":$BIN_DIR:"*) ;; *) say "Add $BIN_DIR to your PATH to use the 'botwarren' command, for example:"; say "    echo 'export PATH=\"$BIN_DIR:\$PATH\"' >> ~/.profile" ;; esac
   if [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/botwarren-ship/config.json" ]; then
     say "Your existing configuration was kept. The ship agent is running in the background."
@@ -206,6 +265,12 @@ say() { printf '%s\n' "$*"; }
 step() { printf '==> %s\n' "$*"; }
 die() { printf 'install: %s\n' "$*" >&2; exit 1; }
 usage_error() { printf 'install: %s (see --help)\n' "$*" >&2; exit 2; }
+
+fetch_try() { # fetch_try URL DEST: like fetch, but returns non-zero instead of exiting
+  if command -v curl >/dev/null 2>&1; then curl -fsSL --proto '=https,http' --retry 2 --connect-timeout 15 -o "$2" "$1" 2>/dev/null
+  elif command -v wget >/dev/null 2>&1; then wget -q -O "$2" "$1" 2>/dev/null
+  else die "curl or wget is required"; fi
+}
 
 fetch() { # fetch URL DEST
   if command -v curl >/dev/null 2>&1; then curl -fsSL --proto '=https,http' --retry 2 --connect-timeout 15 -o "$2" "$1" || die "could not download $1"
