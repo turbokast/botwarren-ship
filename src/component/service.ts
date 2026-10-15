@@ -9,6 +9,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { entryPath, installCompanion, isLocallyBlocked, readConsent, readCurrent, recordConsent, removeCompanion, runCompanion, type InstallOptions } from './install.ts';
 import { parseDirective, type Directive } from './directive.ts';
+import { ensureShim, removeShim, type ShimEnv } from './shim.ts';
 
 export interface ComponentServiceOptions {
   root: string;
@@ -29,6 +30,8 @@ export interface ComponentServiceOptions {
   /** tests: replace running the companion binary (init / enroll) */
   run?: (entry: string, args: string[], input?: string) => Promise<{ code: number | null; stdout: string }>;
   retryMs?: number;
+  /** where the `botwarren-companion` shim goes (tests); default: the per-user bin directory of the installers */
+  shim?: ShimEnv;
 }
 
 export interface ComponentService {
@@ -95,6 +98,9 @@ export function startComponentService(o: ComponentServiceOptions): ComponentServ
     const cur = readCurrent(o.root);
     if (!cur) return;
     const entry = entryPath(o.root, cur.version);
+    // `botwarren-companion pair` should work in a new terminal: a launcher next to the `botwarren` command (shim.ts), never over a file we did not write
+    const shim = ensureShim(o.shim ?? { env: o.env ?? process.env });
+    if (shim === 'written') o.log('companion: added the `botwarren-companion` command next to `botwarren` (the same as `botwarren companion ...`)');
     if (!(await ensureEnrolled(entry))) { o.log('companion: installed, but it could not be enrolled with the relay yet; will retry'); await report('failed', cur.version, 'enroll_failed'); blockedUntil = now() + (o.retryMs ?? 15 * 60_000); }
     else await report('installed', cur.version);
     daemon?.stop();
@@ -105,6 +111,7 @@ export function startComponentService(o: ComponentServiceOptions): ComponentServ
     daemon?.stop(false); // stop supervising (so it is not restarted) but let the companion's own uninstall shut it down cleanly
     daemon = null;
     await removeCompanion({ root: o.root, log: o.log, run: async (entry, args) => (await run(entry, args)).code === 0 });
+    removeShim(o.shim ?? { env: o.env ?? process.env });
     await report('removed');
   };
 

@@ -227,13 +227,15 @@ describe('the service: directive in, install, enrol, report; remove; refusals ar
       return (fakeFetch(s.files).impl)(url, init);
     }) as typeof fetch;
     let daemonStarted = 0; let daemonStopped = 0;
+    const bin = join(s.root, 'bin'); // the shim goes here, never into the real home
+    mkdirSync(bin, { recursive: true }); writeFileSync(join(bin, 'botwarren'), '#!/bin/sh\n');
     const service = startComponentService({
       root: s.root, baseUrl: BASE, agentVersion: '0.6.0', cloudUrl: 'https://ship.test/internal/companion', secret: 'ship-secret', log: (m) => s.logs.push(m), fetchImpl: cloud, keys: [key.pinned], now: () => NOW.getTime(),
       run: async (_entry, args, input) => { ran.push([...args, ...(input ? ['<stdin>'] : [])]); return { code: 0, stdout: args[0] === 'init' ? JSON.stringify({ hostId: 'h', hostSig: 'A'.repeat(43) }) : '' }; },
-      startDaemon: () => { daemonStarted++; return { stop: () => { daemonStopped++; } }; }, retryMs: 0,
+      startDaemon: () => { daemonStarted++; return { stop: () => { daemonStopped++; } }; }, retryMs: 0, shim: { env: { BOTWARREN_BIN_DIR: bin } },
       ...(o.selftest === undefined ? { selftest: async () => true } : { selftest: async () => o.selftest! }),
     });
-    return { s, service, calls, ran, daemon: () => ({ started: daemonStarted, stopped: daemonStopped }) };
+    return { s, service, calls, ran, bin, daemon: () => ({ started: daemonStarted, stopped: daemonStopped }) };
   }
 
   it('records consent from the directive, installs the signed component, enrols it for ITS key, starts it, reports installed', async () => {
@@ -248,6 +250,8 @@ describe('the service: directive in, install, enrol, report; remove; refusals ar
     expect(t.calls[1]!.body).toEqual({ state: 'installed', version: '0.1.0' });
     expect(t.daemon().started).toBe(1);
     expect(t.s.logs.join('\n')).toContain('your account asked for it');
+    // `botwarren-companion` is on the PATH now: a launcher next to `botwarren` that runs `botwarren companion ...`
+    expect(readFileSync(join(t.bin, 'botwarren-companion'), 'utf8')).toContain('botwarren-companion shim (ship agent)');
     // repeated settings do nothing more
     t.service.onSettings({ companion: { want: 'install', consent: CONSENT } }); await t.service.idle();
     expect(t.calls).toHaveLength(2);
@@ -292,6 +296,7 @@ describe('the service: directive in, install, enrol, report; remove; refusals ar
     expect(existsSync(componentPaths(t.s.root).dir)).toBe(false);
     expect(readConsent(t.s.root)).toBeNull();
     expect(t.calls.at(-1)!.body).toEqual({ state: 'removed' });
+    expect(existsSync(join(t.bin, 'botwarren-companion'))).toBe(false); // the shim goes with the component
     expect(t.daemon().stopped).toBeGreaterThanOrEqual(1);
     t.service.stop();
   });

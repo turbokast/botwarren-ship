@@ -68,6 +68,8 @@ main() {
 
   printf '==> Removing the command and program files\n'
   drop "$BIN_DIR/botwarren"
+  # the `botwarren-companion` launcher the agent adds next to it, only if the agent wrote it (a file of that name we did not write stays)
+  if [ -f "$BIN_DIR/botwarren-companion" ] && grep -q 'botwarren-companion shim (ship agent)' "$BIN_DIR/botwarren-companion" 2>/dev/null; then drop "$BIN_DIR/botwarren-companion"; fi
   drop "$LEGACY_DIR"
   drop "$HOME/.local/bin/botwarren"   # the previous installer's wrapper lived here too
   drop "$ROOT"

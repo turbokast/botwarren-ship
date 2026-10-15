@@ -6,6 +6,19 @@ A release is only built from a dated entry in this file: the release workflow ta
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-15
+
+Makes the optional Botwarren Companion usable from a terminal after the agent installs it. No change to what the agent reads, sends or installs.
+
+### Added
+
+- `botwarren companion pair | devices | pause | resume | confirm | log | claude ... | version` pass through to the installed Companion, so `botwarren companion pair` works on Linux, macOS and Windows without anything on your PATH. Only these subcommands are passed through, only to the component the install gate verified, and never while the computer blocks components. The commands the agent and Claude Code run themselves (`daemon`, `init`, `enroll`, `hook`, `channel`) and `uninstall` (use `botwarren companion remove`, which also forgets the recorded consent) are refused. `botwarren companion status` now also shows the Companion's own status.
+- A `botwarren-companion` command next to `botwarren` in the same per-user bin directory the installers use (`~/.local/bin`, or `<install dir>\bin` on Windows; no administrator rights), written when the Companion is installed and removed with it. It is a two-line launcher that runs `botwarren companion <the same arguments>`: it names no version, path or address. It is only written next to an existing `botwarren` command, and a file of that name the agent did not write is never overwritten or removed.
+
+### Changed
+
+- `botwarren uninstall` (macOS and Linux) also removes that launcher.
+
 ## [0.7.0] - 2026-10-15
 
 The optional, separate Botwarren Companion (remote approvals) can now be installed by the agent, under a strict gate. The agent's own promise is unchanged: it still reads and sends metadata only, and the Companion is a different program with its own privacy statement.

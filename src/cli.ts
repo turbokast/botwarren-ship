@@ -32,7 +32,9 @@ const USAGE = `botwarren - Botwarren ship agent CLI
   botwarren login [--no-open]                                  sign in to botwarren.com as owner of your ship (older installs; not needed with an account)
   botwarren adapters [explain|enable|disable <id>]             which tools Botwarren can see, and what each reads
   botwarren update [status|--dry-run|--version X]              check for / apply a signed update (automatic by default)
-  botwarren companion [status|remove|block|unblock]            the optional Botwarren Companion (remote approvals): look at it, remove it, or refuse it
+  botwarren companion [pair|devices|status|log|claude ...|remove|block|unblock]
+                                                               the optional Botwarren Companion (remote approvals): pair a phone, see its status,
+                                                               remove it, or refuse it (also available as the command botwarren-companion)
   botwarren --version                                          show the ship agent version
 `;
 
