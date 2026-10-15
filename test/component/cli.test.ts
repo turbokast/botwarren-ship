@@ -11,6 +11,10 @@ import { componentPaths, recordConsent, setLocalBlock } from '../../src/componen
 import { SHIM_MARKER, ensureShim, removeShim, shimDir, shimText } from '../../src/component/shim.ts';
 import { mkTmp, rmTmp } from '../update/kit.ts';
 
+// the command names the installers use: botwarren.cmd and botwarren-companion.cmd on Windows
+const WIN = process.platform === 'win32';
+const BW = WIN ? 'botwarren.cmd' : 'botwarren';
+const SHIM = WIN ? 'botwarren-companion.cmd' : 'botwarren-companion';
 const cleanup: (() => void)[] = [];
 afterEach(() => { for (const c of cleanup.splice(0)) c(); });
 
@@ -89,18 +93,18 @@ describe('botwarren companion <command>: passthrough to the installed companion'
 
   it('status shows the install and then the companion\'s own status; remove deletes the files and the shim', async () => {
     const w = world(); const seen: string[][] = [];
-    writeFileSync(join(w.bin, 'botwarren'), '#!/bin/sh\n');
+    writeFileSync(join(w.bin, BW), '#!/bin/sh\n');
     const exec = async (_e: string, a: string[]): Promise<number> => { seen.push(a); return 0; };
     const s = await quiet(() => runCompanion(w.cfg, ['status'], { env: w.env, exec }));
     expect(s.out).toContain('installed: yes, version 0.1.0'); expect(s.out).toContain('botwarren companion pair');
     expect(seen).toEqual([['status']]);
     // a passthrough repairs a missing shim
     await runCompanion(w.cfg, ['devices'], { env: w.env, exec });
-    expect(existsSync(join(w.bin, 'botwarren-companion'))).toBe(true);
+    expect(existsSync(join(w.bin, SHIM))).toBe(true);
     const r = await quiet(() => runCompanion(w.cfg, ['remove'], { env: w.env, exec }));
     expect(r.result).toBe(0);
     expect(existsSync(componentPaths(w.root).dir)).toBe(false);
-    expect(existsSync(join(w.bin, 'botwarren-companion'))).toBe(false);
+    expect(existsSync(join(w.bin, SHIM))).toBe(false);
   });
 });
 
@@ -110,32 +114,32 @@ describe('the botwarren-companion shim', () => {
   it('is written only next to a botwarren command, and only the same fixed text', () => {
     const bin = tmpBin(); const o = { env: { BOTWARREN_BIN_DIR: bin } };
     expect(ensureShim(o)).toBe('no_botwarren_command');
-    expect(existsSync(join(bin, 'botwarren-companion'))).toBe(false);
-    writeFileSync(join(bin, 'botwarren'), '#!/bin/sh\n');
+    expect(existsSync(join(bin, SHIM))).toBe(false);
+    writeFileSync(join(bin, BW), '#!/bin/sh\n');
     expect(ensureShim(o)).toBe('written');
-    expect(readFileSync(join(bin, 'botwarren-companion'), 'utf8')).toBe(shimText(false));
+    expect(readFileSync(join(bin, SHIM), 'utf8')).toBe(shimText(WIN));
     expect(ensureShim(o)).toBe('present');
     // it names no version, no path to the component and no URL
-    expect(shimText(false)).not.toMatch(/https?:|versions|\.mjs|node/);
+    expect(shimText(WIN)).not.toMatch(/https?:|versions|\.mjs|node/);
     expect(shimText(true)).not.toMatch(/https?:|versions|\.mjs|node/);
   });
 
   it('never overwrites or removes a file this agent did not write', () => {
     const bin = tmpBin(); const o = { env: { BOTWARREN_BIN_DIR: bin } };
-    writeFileSync(join(bin, 'botwarren'), '#!/bin/sh\n');
-    writeFileSync(join(bin, 'botwarren-companion'), '#!/bin/sh\necho mine\n');
+    writeFileSync(join(bin, BW), '#!/bin/sh\n');
+    writeFileSync(join(bin, SHIM), '#!/bin/sh\necho mine\n');
     expect(ensureShim(o)).toBe('foreign_file');
     expect(removeShim(o)).toBe(false);
-    expect(readFileSync(join(bin, 'botwarren-companion'), 'utf8')).toContain('echo mine');
+    expect(readFileSync(join(bin, SHIM), 'utf8')).toContain('echo mine');
   });
 
   it('updates its own older text and is removed with the component', () => {
     const bin = tmpBin(); const o = { env: { BOTWARREN_BIN_DIR: bin } };
-    writeFileSync(join(bin, 'botwarren'), '#!/bin/sh\n');
-    writeFileSync(join(bin, 'botwarren-companion'), `#!/bin/sh\n# ${SHIM_MARKER}: old\nexit 1\n`);
+    writeFileSync(join(bin, BW), '#!/bin/sh\n');
+    writeFileSync(join(bin, SHIM), `#!/bin/sh\n# ${SHIM_MARKER}: old\nexit 1\n`);
     expect(ensureShim(o)).toBe('written');
     expect(removeShim(o)).toBe(true);
-    expect(existsSync(join(bin, 'botwarren-companion'))).toBe(false);
+    expect(existsSync(join(bin, SHIM))).toBe(false);
   });
 
   it('puts it where the installers put `botwarren` (Linux and macOS ~/.local/bin; Windows <install dir>\\bin)', () => {
