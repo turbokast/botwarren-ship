@@ -133,7 +133,7 @@ botwarren update [status]            updates (see below)
 | Codex | rollout file headers | pairs with a Claude session of the same project. Verified against a live install |
 | Herdr | local socket, `agent.list` only | named sessions supported; Windows unverified |
 | Ninox | `127.0.0.1` read-only API | macOS and Linux; merged with the Claude session it runs. Unverified against a live install |
-| OpenCode | its local server | documented shapes; unverified against a live install |
+| OpenCode | its local server (2.x and 1.x; 2.x needs `OPENCODE_SERVER_PASSWORD` in the agent's environment) | 2.x routes and login behaviour checked live on an empty server, session rows from its API document; 1.x from documentation |
 | Gemini CLI | file names only | unverified against a live install |
 
 Configure in `config.json`: `"adapters": { "ninox": { "enabled": true, "port": 8081 } }`. To add a tool, see [docs/ADAPTERS.md](docs/ADAPTERS.md) and [CONTRIBUTING.md](CONTRIBUTING.md): every adapter needs a canary test scenario.

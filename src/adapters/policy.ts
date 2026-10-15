@@ -17,6 +17,8 @@ export interface LoopbackOptions {
   allow: readonly string[];
   port: number;
   host?: '127.0.0.1' | '::1';
+  /** HTTP Basic credentials for the tool's own loopback server. Sent only on a request that asks for it (`auth: true`), never logged. */
+  auth?: { user: string; password: string } | undefined;
 }
 
 export function makeLoopbackHttp(o: LoopbackOptions): LoopbackHttp {
@@ -29,8 +31,10 @@ export function makeLoopbackHttp(o: LoopbackOptions): LoopbackHttp {
       const d = denied(path);
       if (d) return Promise.reject(d);
       const maxBytes = Math.min(opts.maxBytes ?? MAX_BODY, MAX_BODY);
+      const headers: Record<string, string> = { accept: 'application/json' };
+      if (opts.auth && o.auth) headers.authorization = `Basic ${Buffer.from(`${o.auth.user}:${o.auth.password}`, 'utf8').toString('base64')}`;
       return new Promise((resolve, reject) => {
-        const req = request({ host, port: o.port, path, method: 'GET', agent: false, timeout: opts.timeoutMs ?? 4000, headers: { accept: 'application/json' } }, (res) => {
+        const req = request({ host, port: o.port, path, method: 'GET', agent: false, timeout: opts.timeoutMs ?? 4000, headers }, (res) => {
           const chunks: Buffer[] = [];
           let n = 0;
           res.on('data', (c: Buffer) => {

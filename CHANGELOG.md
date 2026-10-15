@@ -6,6 +6,15 @@ A release is only built from a dated entry in this file: the release workflow ta
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-10-15
+
+OpenCode 2.x support. No change to what the agent sends: still metadata only.
+
+### Added
+
+- The OpenCode adapter reads OpenCode 2.x's local server as well as 1.x: whether each session is working, idle or waiting for you, sub-agent sessions, and the session's folder for attribution (kept on this computer). It uses four read-only routes, checks the server really is OpenCode before trusting the port, and keeps no titles, models, costs, prompts or permission details.
+- OpenCode 2.x protects its local server with a password. If you want Botwarren to see it, set `OPENCODE_SERVER_PASSWORD` (and `OPENCODE_SERVER_USERNAME` if you changed it) in the agent's environment. The agent sends it only to a server that has identified itself as OpenCode by its own sign-in challenge, never stores or logs it, and reads nothing from OpenCode's files. Without it, OpenCode 2.x is simply not shown.
+
 ## [0.7.1] - 2026-10-15
 
 Makes the optional Botwarren Companion usable from a terminal after the agent installs it. No change to what the agent reads, sends or installs.

@@ -98,7 +98,7 @@ export const ObservationSchema = z.discriminatedUnion('kind', [SessionObs, Ended
 export type Observation = z.input<typeof ObservationSchema>;
 
 export interface ReadDecl {
-  kind: 'file' | 'dir' | 'loopback-http' | 'unix-socket' | 'named-pipe';
+  kind: 'file' | 'dir' | 'loopback-http' | 'unix-socket' | 'named-pipe' | 'env';
   /** human-readable, shown by `botwarren adapters explain <id>`. Never executed. */
   target: string;
   /** what we take from it, in plain words */
@@ -139,7 +139,7 @@ export interface DetectEnv {
 export interface ProjectRef { id: string; repoPaths: string[] }
 
 export interface LoopbackHttp {
-  get(path: string, opts?: { maxBytes?: number; timeoutMs?: number }): Promise<{ status: number; body: string }>;
+  get(path: string, opts?: { maxBytes?: number; timeoutMs?: number; auth?: boolean }): Promise<{ status: number; body: string }>;
   /** Server-sent events: `onData` receives complete `data:` lines (capped); resolves when the stream ends. */
   sse(path: string, onData: (line: string) => void, signal: AbortSignal): Promise<void>;
 }
@@ -175,6 +175,11 @@ export interface AdapterContext {
 export interface Adapter {
   manifest: AdapterManifest;
   detect(env: DetectEnv): Promise<Detection>;
+  /**
+   * optional: HTTP Basic credentials for the tool's own loopback server, taken ONLY from environment variables the user set for
+   * that tool (declared in the manifest as an `env` read). The host attaches them solely to requests that pass `auth: true`.
+   */
+  httpAuth?(env: Record<string, string | undefined>): { user: string; password: string } | null;
   /** optional: open streams / hints. Must not block. */
   start?(ctx: AdapterContext): Promise<void>;
   poll(ctx: AdapterContext, now: Date): Promise<Observation[]>;

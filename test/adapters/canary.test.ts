@@ -16,6 +16,7 @@ import { OpenCodeAdapter } from '../../src/adapters/opencode.ts';
 import { GeminiCliAdapter, projectHash } from '../../src/adapters/gemini.ts';
 import { line, writeCodex, writeSession } from '../helpers.ts';
 import type { Host } from '../../src/paths.ts';
+import { fakeOpencodeV2, v2Bodies } from './opencode-fixtures.ts';
 import { CANARY_CONTENT, CANARY_PATH, assertNoLeak, fakeHerdr, fakeHttp, herdrHost, linuxHost, makeHost, mkTmp, rmTmp } from './kit.ts';
 
 const NOW = new Date('2026-10-14T12:00:00.000Z');
@@ -101,6 +102,17 @@ const scenarios: Scenario[] = [
       });
       cleanup.push(srv.close);
       return { adapters: [new OpenCodeAdapter()], settings: { port: srv.port } };
+    },
+  },
+  {
+    // OpenCode 2.x: wrapped bodies, session titles/metadata, permission requests (action, resources, message) and forms full of
+    // canaries, behind Basic auth whose PASSWORD is itself a content canary (so this also proves the password never reaches an event or log)
+    name: 'opencode-v2',
+    build: async (home) => {
+      const b = v2Bodies({ content: CANARY_CONTENT, folder: REPO, now: NOW.getTime() });
+      const srv = await fakeOpencodeV2({ '/api/session/active': b.active, '/api/session': b.list, '/api/permission/request': b.permissions, '/api/form': b.forms }, { password: CANARY_CONTENT });
+      cleanup.push(srv.close);
+      return { adapters: [new OpenCodeAdapter()], settings: { port: srv.port }, host: (env) => linuxHost(home, { ...env, OPENCODE_SERVER_PASSWORD: CANARY_CONTENT }) };
     },
   },
   {

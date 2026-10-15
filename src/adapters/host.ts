@@ -79,7 +79,7 @@ export class AdapterHost {
       host: this.o.host, instance: this.o.instance, settings, projects: this.o.projects,
       attribute: this.o.attribute, attributionEpoch: this.o.attributionEpoch ?? (() => 0),
       http: port > 0 && allow.length > 0
-        ? makeLoopbackHttp({ allow, port, ...(settings.host ? { host: settings.host } : {}) })
+        ? makeLoopbackHttp({ allow, port, ...(settings.host ? { host: settings.host } : {}), auth: adapter.httpAuth?.(this.o.host.env) ?? undefined })
         : { get: () => Promise.reject(new PolicyError('no loopback access declared')), sse: () => Promise.reject(new PolicyError('no loopback access declared')) },
       fs: makeScopedFs(roots),
       log: (code: LogCode, n?: number) => this.o.log(`adapter ${id}: ${code}${typeof n === 'number' && Number.isFinite(n) ? ` (${Math.trunc(n)})` : ''}`),

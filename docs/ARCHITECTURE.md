@@ -40,7 +40,7 @@ Privacy by construction (enforced by the host, not by adapter authors):
 | `codex` | rollout file names and mtimes; only `id`, `cwd`, `originator`, `source` of the first line | live |
 | `herdr` | `agent.list` and `ping` on the Herdr socket; named sessions; sessions are never ended while Herdr is unreachable | fixture; Windows unverified |
 | `ninox` | `GET /api/v1/sessions` and the events stream (as a wake-up hint only) on `127.0.0.1`; the response shape is verified before the port is trusted | fixture; unverified against a live install |
-| `opencode` | `GET /session/status` and `GET /session` of its local server | fixture from documentation; unverified live |
+| `opencode` | 2.x: `GET /api/session/active`, `/api/session`, `/api/permission/request`, `/api/form` (only the ids of waiting sessions); 1.x: `GET /session/status` and `GET /session`. Uses `OPENCODE_SERVER_PASSWORD` from the agent's environment if set | 2.x routes and login behaviour live on an empty server, session rows from its API document; 1.x from documentation |
 | `gemini-cli` | file names and write times only (no file content) | fixture from documentation; unverified live |
 
 Configuration: `"adapters": { "ninox": { "enabled": true, "port": 8081 } }`; `enabled` is `true`, `false` or `"auto"` (default except Claude Code and Codex: polled only while the tool is detected). Commands: `botwarren adapters`, `botwarren adapters explain <id>`, `botwarren adapters enable|disable|auto <id>`. To add an adapter, see [CONTRIBUTING.md](../CONTRIBUTING.md): an adapter without a canary scenario is not merged.
