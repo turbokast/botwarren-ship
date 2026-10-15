@@ -8,14 +8,15 @@ import { GeminiCliAdapter } from './gemini.ts';
 import type { Adapter, AdapterSettings, Detection } from './api.ts';
 import { makeDetectEnv, settingsFor, type AdaptersConfig } from './config.ts';
 import { makeScopedFs } from './policy.ts';
+import type { CodeMapHook } from '../readers/subagents.ts';
 
 export interface AdapterEntry { adapter: Adapter; settings: AdapterSettings }
 
 export interface AdapterConfigInput { harnessLogDirs: string[]; codexLogDirs: string[]; adapters?: AdaptersConfig | undefined }
 
 /** All known adapters with resolved settings (ports filled in). Disabled ones are included; the host skips them. */
-export function buildAdapters(cfg: AdapterConfigInput, host: Host): AdapterEntry[] {
-  const claude = new ClaudeCodeAdapter(cfg.harnessLogDirs);
+export function buildAdapters(cfg: AdapterConfigInput, host: Host, codemap?: CodeMapHook): AdapterEntry[] {
+  const claude = new ClaudeCodeAdapter(cfg.harnessLogDirs, codemap);
   const codex = new CodexAdapter(cfg.codexLogDirs, () => claude.mains());
   const ninoxSettings = settingsFor(cfg.adapters, 'ninox');
   const ninoxCfg = ninoxConfigPath(host);

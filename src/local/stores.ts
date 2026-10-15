@@ -87,6 +87,8 @@ export class PrivateStore {
   consumeThrough(identity: string, id: number): void { this.db.prepare('DELETE FROM outbox_v2 WHERE identity=? AND id<=?').run(identity, id); }
   /** Revocation: drop all pending versions of an identity. */
   removeOutbox(identity: string): void { this.db.prepare('DELETE FROM outbox_v2 WHERE identity=?').run(identity); }
+  /** Code map switched off: nothing about areas may wait in the outbox any longer. */
+  removeAreaOutbox(): number { return Number(this.db.prepare("DELETE FROM outbox_v2 WHERE identity LIKE 'area:%' OR identity LIKE 'areas:%'").run().changes); }
   clearOutbox(): number { return Number(this.db.prepare('DELETE FROM outbox_v2').run().changes); }
 
   quarantine(reason: string, eventId: string | null, detail: string, now: string): void {

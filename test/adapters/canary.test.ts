@@ -162,6 +162,27 @@ describe('canary redaction: no adapter lets a secret reach an event, a public pr
     assertNoLeak(all, logs, ['demo1']);
   });
 
+  // Code map (opt-in): file paths ARE read locally while it is on. A folder canary and a file canary in those paths must still reach nothing.
+  for (const on of [true, false]) {
+    it(`claude-code with Code map ${on ? 'ON' : 'OFF'}: paths with a folder canary reach no event, projection or log (and OFF never even probes)`, async () => {
+      const home = mkTmp(); cleanup.push(() => rmTmp(home));
+      const root = join(home, '.claude', 'projects');
+      const probed: string[] = [];
+      const hook = { on: () => on, areaOf: (_p: string | null, _c: string | null, raw: string) => { probed.push(raw); return 3; } };
+      const f = writeSession(root, `-work-${CANARY_PATH}-game`, UUID, REPO, new Date(NOW.getTime() - 3000), claudeLog(REPO, 1));
+      const adapter = new ClaudeCodeAdapter([root], hook);
+      const { host, logs } = makeHost({ adapters: [{ adapter }], host: linuxHost(home), projects });
+      const all: CanonicalEventInput[] = [...await host.tick(NOW)];
+      const use = (name: string, file: string, i: number) => line({ cwd: REPO, type: 'assistant', timestamp: new Date(NOW.getTime() + 1000 + i).toISOString(), message: { role: 'assistant', content: [{ type: 'tool_use', id: `cm${i}`, name, input: { file_path: file, old_string: CANARY_CONTENT } }] } });
+      appendFileSync(f, use('Edit', `${REPO}/${CANARY_PATH}/src/${CANARY_PATH}.ts`, 1) + use('Read', `${REPO}/docs/${CANARY_PATH}.md`, 2));
+      utimesSync(f, at(2), at(2));
+      all.push(...await host.tick(at(3)), ...await host.tick(at(6)));
+      const areas = all.filter((e) => e.type === 'session.activity' && (e as { kind: string }).kind === 'area');
+      if (on) { expect(areas.length).toBeGreaterThan(0); expect(probed.length).toBeGreaterThan(0); } else { expect(areas).toEqual([]); expect(probed).toEqual([]); }
+      assertNoLeak(all, logs, ['demo1']);
+    });
+  }
+
   it('the leak check itself catches a leak (a deliberately broken adapter fails it)', async () => {
     const leaky: Adapter = {
       manifest: new GeminiCliAdapter(linuxHost('/h')).manifest,

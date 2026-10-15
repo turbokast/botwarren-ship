@@ -48,6 +48,12 @@ export const ShipConfigSchema = z.object({
   dataDir: z.string().min(1).optional(),
   /** Per-tool adapter switches: { "ninox": { "enabled": true, "port": 8081 } }. See `botwarren adapters`. */
   adapters: AdaptersConfigSchema.optional(),
+  /**
+   * Code map (the owner's opt-in, default OFF). 'website' (default) = follow the switch on your ship's settings page, which is off until you turn it on;
+   * 'on' = on for this computer whatever the website says (for ships without a website account); 'off' = never, whatever the website says.
+   * While on, the agent reads the file paths of your agents' tool calls ON THIS COMPUTER only, to pick an area number.
+   */
+  codeMap: z.enum(['website', 'on', 'off']).optional(),
   /** Silent updates: { "enabled": false } opts out; see docs/ARCHITECTURE.md */
   updates: UpdatesConfigSchema.optional(),
 }).strict().superRefine((c, ctx) => {
@@ -70,6 +76,7 @@ export interface ShipConfig {
   demo: boolean;
   dataDir: string;
   adapters?: AdaptersConfig | undefined;
+  codeMap: 'website' | 'on' | 'off';
   updates?: UpdatesConfig | undefined;
 }
 
@@ -92,6 +99,7 @@ export function resolveConfig(raw: unknown, host: Host = currentHost()): ShipCon
     demo: c.demo,
     dataDir: c.dataDir ?? defaultDataDir(host),
     adapters: c.adapters,
+    codeMap: c.codeMap ?? 'website',
     updates: c.updates,
   };
 }

@@ -11,6 +11,7 @@
  */
 import { z } from 'zod';
 import { ContextFill } from './public.ts';
+import { AreaAct, AreaIndex, PublicAreas } from './codemap.ts';
 
 export const SCHEMA_VERSION = 1 as const;
 
@@ -97,9 +98,15 @@ export const SessionActivity = z.object({
   ...base,
   type: z.literal('session.activity'),
   sessionKey: EntityKey,
-  kind: z.enum(['tool_error', 'step', 'context']),
+  kind: z.enum(['tool_error', 'step', 'context', 'area']),
   toolCategory: ToolCategory,
   step: StepCategory.optional(),
+  /**
+   * kind 'area' (Code map, opt-in): the opaque area INDEX a tool call touched, resolved locally from the file path (the path is discarded,
+   * it is never in this event) and what kind of call it was. Present only while the owner has Code map on.
+   */
+  area: AreaIndex.optional(),
+  areaAct: AreaAct.optional(),
   /** kind 'context': the BUCKETED context fill (derived locally from numeric token-usage metadata; never a raw count) */
   context: ContextFill.optional(),
   /** kind 'context': the session's context was just compacted (compact boundary marker, metadata only) */
@@ -160,6 +167,17 @@ export const ProjectMetrics = z.object({
   files: z.number().int().nonnegative().max(1e7),
 });
 
+/**
+ * Code map (opt-in): the areas of a project's codebase as opaque indices, a closed-enum kind and a staleness bucket each, derived
+ * locally from git history and edits the agent saw. No names, paths or counts.
+ */
+export const ProjectAreas = z.object({
+  ...base,
+  type: z.literal('project.areas'),
+  projectId: ProjectId,
+  areas: PublicAreas,
+});
+
 /** Code hosts a ship owner can connect (read-only) so their ship shows real repository activity. */
 export const CodeHost = z.enum(['github', 'gitlab', 'codeberg']);
 export type CodeHost = z.infer<typeof CodeHost>;
@@ -208,7 +226,7 @@ export const CollectorHeartbeat = z.object({
 });
 
 export const CanonicalEvent = z.discriminatedUnion('type', [
-  SessionObserved, SessionEnded, SessionActivity, ProjectMetrics, PipelineObserved, JobObserved, DeployObserved, RepoPush, RepoBranch, RepoChange, CollectorHeartbeat,
+  SessionObserved, SessionEnded, SessionActivity, ProjectMetrics, ProjectAreas, PipelineObserved, JobObserved, DeployObserved, RepoPush, RepoBranch, RepoChange, CollectorHeartbeat,
 ]);
 export type CanonicalEvent = z.infer<typeof CanonicalEvent>;
 export type CanonicalEventInput = z.input<typeof CanonicalEvent>;

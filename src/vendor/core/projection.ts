@@ -25,6 +25,11 @@ export interface ProjectionPolicy {
    * appear on repository events. Never commit messages, file paths or author identities, whatever the setting.
    */
   showBranchNames?: boolean;
+  /**
+   * Owner opt-in "Code map", default OFF. Only then may area events be projected (the agent reads file paths locally ONLY while this is on;
+   * this is the second, independent gate). Never a path, a folder name or a file count, whatever the setting.
+   */
+  codeMap?: boolean;
 }
 
 export type ProjectionResult =
@@ -143,6 +148,13 @@ export function projectPublic(e: CanonicalEvent, policy: ProjectionPolicy): Proj
       draft = { ...common, kind: 'change', project, change: `r-${policy.pseudonym('r', e.changeKey)}`, action: e.action, certainty: 'observed', ...(branch ? { branch } : {}) };
       break;
     }
+    case 'project.areas': {
+      if (policy.codeMap !== true) return { ok: false, reason: 'not_publishable' };
+      const project = proj(e.projectId);
+      if (!project) return { ok: false, reason: 'project_not_public' };
+      draft = { ...common, kind: 'areas', project, areas: e.areas.map((a) => ({ i: a.i, kind: a.kind, stale: a.stale })), certainty: 'observed' };
+      break;
+    }
     case 'collector.heartbeat':
       draft = { ...common, kind: 'feed', source: e.collector, health: e.health, certainty: 'observed' };
       break;
@@ -191,6 +203,16 @@ export function projectContext(sessionKey: string, projectId: ProjectId | null, 
   return PublicEvent.safeParse({ ...draft, seq: 0, publishedAt: draft.occurredAt }).success ? { ok: true, draft } : { ok: false, reason: 'schema_violation' };
 }
 
+/** Code map (opt-in): a crew member's latest tool call touched area `area`. Only the index and the tool family; never which file. */
+export function projectArea(sessionKey: string, projectId: ProjectId | null, area: number, act: 'edit' | 'read' | 'other', occurredAt: string, fixture: boolean, policy: ProjectionPolicy): ProjectionResult {
+  if (policy.codeMap !== true) return { ok: false, reason: 'not_publishable' };
+  if (fixture && !policy.demoMode) return { ok: false, reason: 'fixture_in_live_mode' };
+  const project = asPublicProject(projectId, policy);
+  if (!project) return { ok: false, reason: 'project_not_public' };
+  const draft = { v: 1 as const, kind: 'area' as const, project, worker: `w-${policy.pseudonym('w', sessionKey)}`, area, act, certainty: 'observed' as const, occurredAt: coarsen(occurredAt), demo: fixture };
+  return PublicEvent.safeParse({ ...draft, seq: 0, publishedAt: draft.occurredAt }).success ? { ok: true, draft } : { ok: false, reason: 'schema_violation' };
+}
+
 export function projectMishap(sessionKey: string, projectId: ProjectId | null, occurredAt: string, fixture: boolean, eventId: string, policy: ProjectionPolicy): ProjectionResult {
   if (fixture && !policy.demoMode) return { ok: false, reason: 'fixture_in_live_mode' };
   const project = asPublicProject(projectId, policy);
@@ -210,6 +232,9 @@ export function draftIdentity(d: PublicEventDraft): string {
     case 'mishap': return `mishap:${d.worker}:${d.occurredAt}`;
     case 'step': return `step:${d.worker}:${d.occurredAt}`; // keep the sequence (each step waits its own delay)
     case 'project': return `project:${d.project}`;
+    case 'areas': return `areas:${d.project}`;
+    // a visit is a moment: keep the sequence like steps (each waits its own delay)
+    case 'area': return `area:${d.worker}:${d.occurredAt}`;
     case 'repo_push': return `repo_push:${d.project}:${d.occurredAt}:${d.target}:${d.commits}`;
     case 'repo_branch': return `repo_branch:${d.project}:${d.occurredAt}:${d.action}:${d.branch ?? ''}`;
     case 'change': return `change:${d.change}:${d.action}`;

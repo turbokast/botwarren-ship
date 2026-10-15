@@ -13,7 +13,7 @@
  */
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { ContextFill, Harness, HerdrStatus, StepCategory, ToolCategory, WorkCategory } from '../vendor/core/contract.ts';
+import { AreaAct, AreaIndex, ContextFill, Harness, HerdrStatus, StepCategory, ToolCategory, WorkCategory } from '../vendor/core/contract.ts';
 import type { Host } from '../paths.ts';
 
 export const ADAPTER_API_VERSION = 1 as const;
@@ -80,8 +80,11 @@ export const EndedObs = z.object({
 export const ActivityObs = z.object({
   kind: z.literal('activity'),
   key: Key,
-  act: z.enum(['tool_error', 'step', 'context']),
+  act: z.enum(['tool_error', 'step', 'context', 'area']),
   toolCategory: ToolCategory,
+  /** act 'area' (Code map, opt-in): an opaque area index and the tool family; the path it came from was dropped by the reader */
+  area: AreaIndex.optional(),
+  areaAct: AreaAct.optional(),
   step: StepCategory.optional(),
   context: ContextFill.optional(),
   compacted: z.boolean().optional(),

@@ -27,6 +27,8 @@ export interface SessionState {
   lastErrorAt: string | null;
   step?: string;
   context?: string;
+  /** Code map: the area index of the latest tool call (an opaque number; never a path) */
+  area?: number;
 }
 
 export interface PipelineState {
@@ -54,10 +56,12 @@ export interface CollectorState {
 }
 
 export interface ProjectMetricsState { codeLines: number; files: number; measuredAt: string }
+export interface ProjectAreasState { areas: { i: number; kind: string; stale: string }[]; measuredAt: string }
 
 export interface WorldState {
   applied: Set<string>;
   projects: Record<string, ProjectMetricsState>;
+  areas: Record<string, ProjectAreasState>;
   sessions: Record<string, SessionState>;
   pipelines: Record<string, PipelineState>;
   deploys: Record<string, DeployState>;
@@ -66,7 +70,7 @@ export interface WorldState {
 
 export function emptyWorld(): WorldState {
   // null-prototype dictionaries: entity keys can never reach Object.prototype
-  return { applied: new Set(), projects: Object.create(null), sessions: Object.create(null), pipelines: Object.create(null), deploys: Object.create(null), collectors: Object.create(null) };
+  return { applied: new Set(), projects: Object.create(null), areas: Object.create(null), sessions: Object.create(null), pipelines: Object.create(null), deploys: Object.create(null), collectors: Object.create(null) };
 }
 
 const DEPLOY_RANK: Record<DeployPhase, number> = {
@@ -114,6 +118,7 @@ export function apply(w: WorldState, e: CanonicalEvent): boolean {
       if (!cur) return false;
       if (e.kind === 'step') { if (e.step) cur.step = e.step; return true; }
       if (e.kind === 'context') { if (e.context) cur.context = e.context; return true; }
+      if (e.kind === 'area') { if (e.area) cur.area = e.area; return true; }
       if (!cur.lastErrorAt || e.occurredAt > cur.lastErrorAt) cur.lastErrorAt = e.occurredAt;
       return true;
     }
@@ -162,6 +167,12 @@ export function apply(w: WorldState, e: CanonicalEvent): boolean {
       const cur = w.projects[e.projectId];
       if (cur && e.occurredAt <= cur.measuredAt) return false;
       w.projects[e.projectId] = { codeLines: e.codeLines, files: e.files, measuredAt: e.occurredAt };
+      return true;
+    }
+    case 'project.areas': {
+      const cur = w.areas[e.projectId];
+      if (cur && e.occurredAt <= cur.measuredAt) return false;
+      w.areas[e.projectId] = { areas: e.areas, measuredAt: e.occurredAt };
       return true;
     }
     case 'repo.push':

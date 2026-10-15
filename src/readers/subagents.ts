@@ -14,7 +14,7 @@ import { closeSync, fstatSync, openSync, readSync, readdirSync, statSync } from 
 import { basename, dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
 import type { CanonicalEventInput } from '../vendor/core/contract.ts';
-import type { ClaudeLogTail } from './sessionlog.ts';
+import type { AreaProbe, ClaudeLogTail } from './sessionlog.ts';
 
 export type ModelFamily = 'opus' | 'sonnet' | 'haiku' | 'other';
 
@@ -76,12 +76,16 @@ export function readLogMeta(path: string, keys: string[]): Record<string, string
 /** Directory holding a master's sub-agent logs. */
 export const subagentsDir = (masterFile: string): string => join(dirname(masterFile), basename(masterFile, '.jsonl'), 'subagents');
 
-export interface SubagentParent { key: string; file: string; projectId: string | null }
+export interface SubagentParent { key: string; file: string; projectId: string | null; /** the master's working folder (local only; used by Code map to resolve a relative path) */ cwd?: string | null }
+
+/** Code map hook (opt-in, default off): `on()` is asked on every poll, `areaOf` is the only code that sees a path. */
+export interface CodeMapHook { on(): boolean; areaOf(projectId: string | null, cwd: string | null, rawPath: string, edit: boolean): number | null }
 
 export interface SubagentOptions {
   instance: string;
   source: 'herdr' | 'collector';
   tailFor?: (path: string) => Pick<ClaudeLogTail, 'pollPath' | 'forget'> | undefined;
+  codemap?: CodeMapHook;
   workingMs?: number;
   endedMs?: number;
   reobserveMs?: number;
@@ -98,7 +102,7 @@ interface Sub {
 const sha = (...p: string[]) => createHash('sha256').update(p.join('\0')).digest('hex');
 
 export class SubagentWatcher {
-  private readonly o: Required<Omit<SubagentOptions, 'tailFor'>> & Pick<SubagentOptions, 'tailFor'>;
+  private readonly o: Required<Omit<SubagentOptions, 'tailFor' | 'codemap'>> & Pick<SubagentOptions, 'tailFor' | 'codemap'>;
   private readonly subs = new Map<string, Sub>();
   private readonly lastDiscover = new Map<string, number>();
 
@@ -155,10 +159,15 @@ export class SubagentWatcher {
       }
       const tail = this.o.tailFor?.(s.path);
       if (tail) {
-        try { for (const e of tail.pollPath(s.key, s.path, this.o.instance, now)) out.push({ ...e, source: this.o.source, sourceInstance: this.o.instance } as CanonicalEventInput); } catch { /* skip */ }
+        try { for (const e of tail.pollPath(s.key, s.path, this.o.instance, now, this.probe(parent.projectId, parent.cwd ?? null))) out.push({ ...e, source: this.o.source, sourceInstance: this.o.instance } as CanonicalEventInput); } catch { /* skip */ }
       }
     }
     return out;
+  }
+
+  private probe(projectId: string | null, cwd: string | null): AreaProbe | undefined {
+    const cm = this.o.codemap;
+    return cm && projectId !== null && cm.on() ? (raw, edit) => cm.areaOf(projectId, cwd, raw, edit) : undefined;
   }
 
   private observed(s: Sub, at: Date): CanonicalEventInput {

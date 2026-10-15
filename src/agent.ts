@@ -15,6 +15,7 @@ import type { Server } from 'node:http';
 import { PrivateService } from './local/service.ts';
 import { Replicator } from './local/replicator.ts';
 import { measure, metricsEvent } from './readers/codesize.ts';
+import { CodeMapService, codeMapStateFile } from './readers/codemap.ts';
 import { parseAdaptersOff, parseDelay, parseProjectChoices, type AgentAdapterId, type CanonicalEventInput, type ShipManifest } from './vendor/core/contract.ts';
 import { defaultPublicName, publishUrl, type ShipConfig } from './config.ts';
 import { dataPaths } from './paths.ts';
@@ -123,6 +124,7 @@ export async function startAgent(cfg: ShipConfig, opts: AgentOptions = {}): Prom
     // public ship manifest: SAFE names until the server says the owner opted in to real names (validated against core's DisplayText)
     shipManifest: initial.manifest,
     statusExtra: () => statusExtra(),
+    codeMapLocal: () => codemap.local(),
     opsHtml: () => (opsHtmlPath && existsSync(opsHtmlPath) ? readFileSync(opsHtmlPath, 'utf8') : '<h1>Botwarren ops</h1>'),
   });
 
@@ -147,9 +149,17 @@ export async function startAgent(cfg: ShipConfig, opts: AgentOptions = {}): Prom
 
   const attributor = new ProjectAttributor(live);
   let attributionEpoch = 0;
-  const entries = buildAdapters(cfg, host);
+  // ---- Code map (opt-in, default OFF): on only when the website switch is on ('website', the default) or the local config says 'on'; the local config can also say 'off'
+  let codeMapWebsite = false;
+  const codeMapOn = (): boolean => cfg.codeMap === 'on' || (cfg.codeMap === 'website' && codeMapWebsite);
+  const codemap = new CodeMapService({
+    stateFile: codeMapStateFile(cfg.dataDir), projects: () => live, enabled: codeMapOn, instance,
+    log: (m) => log(m),
+  });
+  const entries = buildAdapters(cfg, host, { on: codeMapOn, areaOf: (project, cwd, raw, edit) => codemap.areaOf(project, cwd, raw, edit) });
   const savedAdapterSettings = new Map<AgentAdapterId, boolean | 'auto'>();
   let lookRejected: string | null = null;
+  const applyCodeMap = (): void => { const on = codeMapOn(); svc.setCodeMap(on, 'config'); if (!on) codemap.clear(); else setTimeout(() => void mapRefresh(), 0).unref(); };
   let projectsRejected = false;
   /** the optional Botwarren Companion component (component/): driven only by the website's install/remove directive, gated by install.ts */
   let components: ComponentService | null = null;
@@ -195,6 +205,9 @@ export async function startAgent(cfg: ShipConfig, opts: AgentOptions = {}): Prom
       // tools switched off on the website (they can only be turned off, or back to the configured setting)
       const off = parseAdaptersOff(settings?.adapters);
       if (off && applyAdapterOverrides(entries, off, savedAdapterSettings)) { log(`tools switched off from the website: ${off.length ? off.join(', ') : 'none'}`); changed = true; }
+      // Code map: only an explicit true from the website turns it on (anything else, an old server included, is off)
+      const wantMap = settings?.codeMap === true;
+      if (wantMap !== codeMapWebsite) { codeMapWebsite = wantMap; applyCodeMap(); log(`code map: ${codeMapOn() ? 'ON (owner setting)' : 'off'}`); changed = true; }
       components?.onSettings(settings as { companion?: unknown } | null);
       if (changed) setTimeout(() => void replicator.tick(), 0).unref();
     },
@@ -231,6 +244,13 @@ export async function startAgent(cfg: ShipConfig, opts: AgentOptions = {}): Prom
     void (async () => { try { ingest(await adapters.tick(new Date(), only)); } catch (e) { log(`adapter wake failed (${safeErrorCode(e)})`); } })();
   };
   await adapters.start();
+  // Code map: rebuilds a project's areas now and then (git, niced) and says when the picture changed; a no-op while off
+  let mapping = false;
+  const mapRefresh = async (): Promise<void> => {
+    if (mapping) return; mapping = true;
+    try { ingest(await codemap.refresh()); } catch (e) { log(`code map failed (${safeErrorCode(e)})`); } finally { mapping = false; }
+  };
+  applyCodeMap();
   let sizing = false;
   const size = async () => {
     if (sizing) return; sizing = true;
@@ -280,11 +300,12 @@ export async function startAgent(cfg: ShipConfig, opts: AgentOptions = {}): Prom
     unauthorized: replicator.unauthorized.count, projectsNoticed: discovery.list().length, projectsShown: discovery.shown().length + cfg.projects.length,
     reportedAt: reportedAt ? new Date(reportedAt).toISOString() : null, agentVersion: VERSION,
     tools: adapters.statuses().map((s) => ({ id: s.id, state: s.state, code: s.code })),
+    codeMap: codemap.status(),
   });
 
   ingest([heartbeat(instance, 'healthy', new Date())]);
   timers.push(
-    setInterval(() => void scan(), 3000), setInterval(() => ingest([heartbeat(instance, 'healthy', new Date())]), 30_000), setInterval(() => void size(), 30 * 60_000),
+    setInterval(() => void scan(), 3000), setInterval(() => ingest([heartbeat(instance, 'healthy', new Date())]), 30_000), setInterval(() => void size(), 30 * 60_000), setInterval(() => void mapRefresh(), 60_000),
     setInterval(() => { void maybeReport(); watchRevoked(); discovery.flush(); }, opts.housekeepingMs ?? 15_000),
   );
   for (const t of timers) t.unref();
@@ -308,6 +329,7 @@ export async function startAgent(cfg: ShipConfig, opts: AgentOptions = {}): Prom
     svc, server, replicator, adapters, discovery,
     stop: async () => {
       for (const t of timers) clearInterval(t);
+      codemap.clear();
       updates.stop();
       components?.stop();
       await adapters.stop();

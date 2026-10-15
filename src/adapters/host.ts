@@ -182,10 +182,11 @@ export class AdapterHost {
       if (!this.recs.has(ck)) continue; // activity of a session no adapter reports as live: dropped
       const at = obs.at;
       out.push({
-        schemaVersion: 1, eventId: `act-${sha(ck, obs.act, obs.toolCategory, obs.step ?? '', obs.context ?? '', String(obs.compacted ?? ''), at).slice(0, 32)}`,
+        schemaVersion: 1, eventId: `act-${sha(ck, obs.act, obs.toolCategory, obs.step ?? '', obs.context ?? '', String(obs.compacted ?? ''), String(obs.area ?? ''), at).slice(0, 32)}`,
         source: 'collector', sourceInstance: this.o.instance, sourceEventId: `${obs.act}:${at}`.slice(0, 256), occurredAt: at, observedAt: now.toISOString(),
         type: 'session.activity', sessionKey: ck, kind: obs.act, toolCategory: obs.toolCategory,
         ...(obs.step ? { step: obs.step } : {}), ...(obs.context ? { context: obs.context } : {}), ...(obs.compacted ? { compacted: true } : {}),
+        ...(obs.act === 'area' && obs.area ? { area: obs.area, areaAct: obs.areaAct ?? 'read' } : {}),
       } as CanonicalEventInput);
     }
     out.push(...this.drainMergedEnds(now));

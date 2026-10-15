@@ -5,6 +5,7 @@
  */
 import type { CanonicalEventInput } from '../vendor/core/contract.ts';
 import { SessionScanner, type MainInfo } from '../sessionscan.ts';
+import type { CodeMapHook } from '../readers/subagents.ts';
 import { CodexScanner } from '../codex.ts';
 import type { Adapter, AdapterContext, AdapterManifest, DetectEnv, Detection, Observation } from './api.ts';
 import { ADAPTER_API_VERSION } from './api.ts';
@@ -33,6 +34,7 @@ export function eventsToObservations(events: CanonicalEventInput[], tool: 'claud
       out.push({
         kind: 'activity', key: e.sessionKey, act: e.kind, toolCategory: e.toolCategory, at: e.occurredAt,
         ...(e.step ? { step: e.step } : {}), ...(e.context ? { context: e.context } : {}), ...(e.compacted ? { compacted: true } : {}),
+        ...(e.kind === 'area' && e.area ? { area: e.area, ...(e.areaAct ? { areaAct: e.areaAct } : {}) } : {}),
       });
     }
   }
@@ -45,12 +47,13 @@ export class ClaudeCodeAdapter implements Adapter {
   readonly manifest: AdapterManifest;
   private scanner: SessionScanner | null = null;
   private readonly dirs: string[];
-  constructor(dirs: string[]) {
-    this.dirs = dirs;
+  private readonly codemap: CodeMapHook | undefined;
+  constructor(dirs: string[], codemap?: CodeMapHook) {
+    this.dirs = dirs; this.codemap = codemap;
     this.manifest = {
       id: 'claude-code', apiVersion: ADAPTER_API_VERSION, version: '1.0.0', platforms: ['win32', 'darwin', 'linux'],
       reads: [
-        { kind: 'dir', target: dirs[0] ?? '~/.claude/projects', keeps: 'session log file names and write times; the project folder (cwd) of the newest lines; tool names, error flags, model family and numeric token counts (bucketed). Never message text.' },
+        { kind: 'dir', target: dirs[0] ?? '~/.claude/projects', keeps: 'session log file names and write times; the project folder (cwd) of the newest lines; tool names, error flags, model family and numeric token counts (bucketed). Never message text. Only while you turn on Code map (off by default): the file path of a Read/Edit/Write-style tool call, on this computer, to pick an area number; the path is not kept or sent.' },
       ],
       capabilities: { state: true, toolCategory: true, errors: true, subagents: true, tokens: true, hierarchy: false },
       upstream: { name: 'Claude Code', tested: 'JSONL session logs, 2026-10', verification: 'live' },
@@ -65,7 +68,7 @@ export class ClaudeCodeAdapter implements Adapter {
     return env.hasCommand('claude') ? { found: true, confidence: 'medium', note: 'claude is installed but has no session logs yet' } : { found: false, confidence: 'high' };
   }
   async poll(ctx: AdapterContext, now: Date): Promise<Observation[]> {
-    this.scanner ??= new SessionScanner({ dirs: this.dirs, instance: ctx.instance, attributor: attributorFor(ctx), epoch: ctx.attributionEpoch });
+    this.scanner ??= new SessionScanner({ dirs: this.dirs, instance: ctx.instance, attributor: attributorFor(ctx), epoch: ctx.attributionEpoch, ...(this.codemap ? { codemap: this.codemap } : {}) });
     return eventsToObservations(await this.scanner.tick(now), 'claude-code');
   }
 }

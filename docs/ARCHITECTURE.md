@@ -32,6 +32,8 @@ Privacy by construction (enforced by the host, not by adapter authors):
 | One crew member per real session. | The host merges observations sharing a correlation id or key; field authority is ordered per field. | `host.test.ts` |
 | Adapters cannot stall the agent. | Concurrent polls with a 15 s timeout, per-poll and session caps, background detection. | `host.test.ts` |
 
+**Code map** (opt-in, default off; `src/readers/codemap.ts`, `src/readers/sessionlog.ts`): while on, the Claude Code log reader passes the path argument of a file tool call to a probe that returns only an opaque area index; the area map is derived from `git ls-files` and `git log -1` (read-only, lowest priority, cached). Events carry an index, a closed-enum kind and a staleness bucket (`project.areas`, `session.activity` kind `area`); the projection (`projectPublic`, `projectArea`) refuses them unless the policy's `codeMap` flag is on. Folder names are hashed with a per-install salt for stable indices and never leave memory or the user-only `private/codemap.json`. The canary scenarios cover it on and off.
+
 **The canary suite** (`test/adapters/canary.test.ts`) is the gate every adapter must pass: a fixture plants a content canary in prompts, tool output, titles, summaries, notes, costs, repository names, environment values and extra fields, and a path canary in folder names. The content canary must appear nowhere (events, public projections through the real `projectPublic`, log lines); the path canary may appear only in `private.cwd`. A self-test proves the checker fails on a leaking adapter.
 
 | Adapter | Reads | Verification |

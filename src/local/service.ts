@@ -7,7 +7,7 @@ import { createServer, type Server } from 'node:http';
 import { createHmac, randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import {
-  CanonicalEvent, ShipLook, ShipManifest, apply, emptyWorld, projectPublic, projectSessionEnded, projectMishap, projectStep, projectContext, draftIdentity, worldDigest,
+  CanonicalEvent, ShipLook, ShipManifest, apply, emptyWorld, projectPublic, projectSessionEnded, projectMishap, projectStep, projectContext, projectArea, draftIdentity, worldDigest,
   type ProjectId, type ProjectionPolicy, type WorldState,
 } from '../vendor/core/contract.ts';
 import { PrivateStore, PublicStoreWriter } from './stores.ts';
@@ -29,6 +29,8 @@ export interface PrivateConfig {
   allowedHosts?: string[];
   /** extra, non-secret facts for the local `botwarren status` (cloud link health, noticed projects); merged into the ops state */
   statusExtra?: () => Record<string, unknown>;
+  /** Code map's LOCAL listing (area number -> folders; names included): served only to the token-protected ops room and the local CLI */
+  codeMapLocal?: () => unknown;
 }
 
 const LOOPBACK_HOSTS = ['127.0.0.1', 'localhost', '[::1]'];
@@ -53,6 +55,8 @@ export class PrivateService {
   /** latest private provenance per session, for the authenticated ops room only */
   private provenance: Record<string, Record<string, unknown>> = Object.create(null);
   private readonly policy: ProjectionPolicy;
+  /** Code map (opt-in, default off): the website's switch for this ship, or the owner's local config. Off = no area event is ever projected. */
+  private codeMapOn = false;
   private timer: NodeJS.Timeout | undefined;
   private readonly now: () => Date;
   /** ops sessions: random id → expiry (ms). The root ops token never goes into a cookie. */
@@ -130,6 +134,17 @@ export class PrivateService {
     return parsed;
   }
 
+  /** Code map is on for this ship (the owner's choice). */
+  get codeMap(): boolean { return this.codeMapOn; }
+  /** Applies the owner's Code map switch. Turning it off also drops every area event still waiting to be published. */
+  setCodeMap(on: boolean, actor = 'cloud'): void {
+    if (this.codeMapOn === on) return;
+    this.codeMapOn = on;
+    this.policy.codeMap = on;
+    if (!on) this.store.removeAreaOutbox();
+    this.store.audit(actor, on ? 'code_map_on' : 'code_map_off', '', this.now().toISOString());
+  }
+
   /** Emergency stop, from the ops room. */
   get localKill(): boolean { return this.store.getSetting('kill_switch') === 'on'; }
   /** "Pause publishing" pressed by the owner on the website (the cloud tells the agent in the publish response). */
@@ -179,6 +194,7 @@ export class PrivateService {
   }
 
   private classify(e: CanonicalEvent, before: WorldState['sessions'][string] | undefined, nowIso: string): void {
+    if (e.type === 'project.areas' && !this.codeMapOn) return; // Code map is off: nothing about areas is ever queued
     if (e.type === 'session.activity' && e.kind === 'step') {
       const r = projectStep(e.sessionKey, before?.projectId ?? null, e.step ?? 'other', e.occurredAt, e.fixture, this.policy);
       if (r.ok) this.store.enqueue(draftIdentity(r.draft), r.draft, nowIso, new Date(Date.parse(nowIso) + this.delaySeconds * 1000).toISOString());
@@ -186,6 +202,11 @@ export class PrivateService {
     }
     if (e.type === 'session.activity' && e.kind === 'context') {
       const r = projectContext(e.sessionKey, before?.projectId ?? null, e.context ?? 'unknown', e.compacted === true, e.occurredAt, e.fixture, this.policy);
+      if (r.ok) this.store.enqueue(draftIdentity(r.draft), r.draft, nowIso, new Date(Date.parse(nowIso) + this.delaySeconds * 1000).toISOString());
+      return;
+    }
+    if (e.type === 'session.activity' && e.kind === 'area') {
+      const r = projectArea(e.sessionKey, before?.projectId ?? null, e.area ?? 0, e.areaAct ?? 'other', e.occurredAt, e.fixture, this.policy);
       if (r.ok) this.store.enqueue(draftIdentity(r.draft), r.draft, nowIso, new Date(Date.parse(nowIso) + this.delaySeconds * 1000).toISOString());
       return;
     }
@@ -384,6 +405,7 @@ export class PrivateService {
           if (req.method !== 'GET' && req.headers['x-botwarren-ops'] !== '1') return json(res, 403, { error: 'csrf' });
           const route = url.pathname.slice('/ops/api/'.length);
           if (req.method === 'GET' && route === 'state') return json(res, 200, this.opsState());
+          if (req.method === 'GET' && route === 'codemap') return json(res, 200, { on: this.codeMapOn, projects: this.cfg.codeMapLocal?.() ?? [] });
           if (req.method === 'POST' && route === 'kill') {
             const on = z.object({ on: z.boolean() }).parse(JSON.parse(await readBody(req, 1024))).on;
             this.setKill(on, 'ops');

@@ -13,7 +13,9 @@
  */
 import { z } from 'zod';
 import { ShipPlanV2 } from './shipplan.ts';
+import { AreaAct, AreaIndex, PublicAreas, type PublicArea } from './codemap.ts';
 export * from './shipplan.ts';
+export * from './codemap.ts';
 export * from './decks.ts';
 
 /** Project slug (per ship). */
@@ -69,6 +71,8 @@ export const ReplicaSettings = z.object({
    * the agent, which accepts ONLY `{ want: 'install' | 'remove', consent: <ISO time> }`: never a URL, a version to fetch or a command.
    */
   companion: z.unknown().optional(),
+  /** Code map (opt-in per ship, default off): the agent may read the file paths of its own agents' tool calls ON THIS COMPUTER to place crew in areas. Anything but an explicit true = off. */
+  codeMap: z.boolean().optional(),
 });
 export type ReplicaSettings = z.infer<typeof ReplicaSettings>;
 
@@ -182,6 +186,22 @@ export const PublicEvent = z.discriminatedUnion('kind', [
   }).strict(),
   z.object({
     ...common,
+    kind: z.literal('area'),
+    project: PublicProject,
+    worker: Key('w'),
+    /** Code map (opt-in): the opaque index of the area this crew member's latest tool call touched, and the tool family (never which file) */
+    area: AreaIndex,
+    act: AreaAct,
+  }).strict(),
+  z.object({
+    ...common,
+    kind: z.literal('areas'),
+    project: PublicProject,
+    /** Code map (opt-in): the project's areas, each an opaque index, a closed-enum kind and a staleness bucket */
+    areas: PublicAreas,
+  }).strict(),
+  z.object({
+    ...common,
     kind: z.literal('pipeline'),
     project: PublicProject,
     pipeline: Key('p'),
@@ -250,14 +270,17 @@ export type PublicEvent = z.infer<typeof PublicEvent>;
 export type PublicEventDraft = PublicEvent extends infer T ? (T extends PublicEvent ? Omit<T, 'seq' | 'publishedAt'> : never) : never;
 
 /** Public world state, reduced only from public events (used by public server + browser). */
-export interface PublicWorker { worker: string; project: PublicProject; harness: string; state: WorkerState; since: string; lastAt: string; certainty: string; demo: boolean; focus: WorkerFocus; lastMishapAt: string | null; step?: WorkerStep; stepAt?: string; recentSteps?: { step: WorkerStep; at: string }[]; role?: 'main' | 'subagent' | 'pair'; parent?: string; model?: string; context?: ContextFill; compactedAt?: string; /** when this crew member was first seen (survives state changes): the "on shift" clock */ born?: string }
+export interface PublicWorker { worker: string; project: PublicProject; harness: string; state: WorkerState; since: string; lastAt: string; certainty: string; demo: boolean; focus: WorkerFocus; lastMishapAt: string | null; step?: WorkerStep; stepAt?: string; recentSteps?: { step: WorkerStep; at: string }[]; role?: 'main' | 'subagent' | 'pair'; parent?: string; model?: string; context?: ContextFill; compactedAt?: string; /** Code map: the area this crew member's latest tool call touched (index) and when (the renderer only walks there while working and the call is recent) */ area?: number; areaAt?: string; areaAct?: 'edit' | 'read' | 'other'; /** when this crew member was first seen (survives state changes): the "on shift" clock */ born?: string }
 export interface PublicPipeline { pipeline: string; project: PublicProject; provider: string; purpose: PublicPurpose; status: PublicCiStatus; lastAt: string; jobs: Record<string, { category: string; status: PublicCiStatus; retried: boolean }>; demo: boolean }
 export interface PublicDeploy { deploy: string; project: PublicProject; phase: PublicDeployPhase; lastAt: string; demo: boolean }
 export interface PublicProjectSize { sizeTier: number; linesApprox: number; lastAt: string }
 export type PublicRepoMoment = { kind: 'push' | 'branch_created' | 'branch_deleted' | 'change_opened' | 'change_merged' | 'change_closed'; at: string; n?: number; branch?: string };
 /** Bounded recent repository activity per project (connected code host): counts and timings only. */
 export interface PublicRepoActivity { recent: PublicRepoMoment[]; lastAt: string }
+/** Code map (opt-in): a project's areas as last published */
+export interface PublicProjectAreas { areas: PublicArea[]; lastAt: string }
 export interface PublicWorld {
+  areas?: Record<string, PublicProjectAreas>;
   repos?: Record<string, PublicRepoActivity>;
   lastSeq: number;
   projects: Record<string, PublicProjectSize>;
@@ -289,6 +312,7 @@ export function applyPublic(w: PublicWorld, e: PublicEvent): boolean {
         ...(e.model ? { model: e.model } : cur?.model ? { model: cur.model } : {}),
         ...(cur?.context ? { context: cur.context } : {}),
         ...(cur?.compactedAt ? { compactedAt: cur.compactedAt } : {}),
+        ...(cur?.area ? { area: cur.area, areaAt: cur.areaAt!, areaAct: cur.areaAct! } : {}),
         ...(cur?.step ? { step: cur.step, stepAt: cur.stepAt!, recentSteps: cur.recentSteps ?? [] } : {}),
       };
       return true;
@@ -306,6 +330,14 @@ export function applyPublic(w: PublicWorld, e: PublicEvent): boolean {
       if (cur) cur.lastMishapAt = e.occurredAt;
       return true;
     }
+    case 'area': {
+      const cur = w.workers[e.worker];
+      if (cur) { cur.area = e.area; cur.areaAt = e.occurredAt; cur.areaAct = e.act; }
+      return true;
+    }
+    case 'areas':
+      (w.areas ??= {})[e.project] = { areas: e.areas, lastAt: e.occurredAt };
+      return true;
     case 'context': {
       const cur = w.workers[e.worker];
       if (cur) { cur.context = e.fill; if (e.compacted) cur.compactedAt = e.occurredAt; }

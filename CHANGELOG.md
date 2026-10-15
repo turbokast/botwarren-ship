@@ -6,6 +6,14 @@ A release is only built from a dated entry in this file: the release workflow ta
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-15
+
+Code map: an optional, off-by-default view of where in each project your crew is working.
+
+### Added
+
+- **Code map (optional, off by default).** When you switch it on for your ship on botwarren.com, the agent places your crew in the part of each project they are working in, and older parts of the code gather dust and cobwebs on your ship. To do that it reads the file paths of your agents' tool calls (Claude Code) and the git history of your projects **on your computer only**. What leaves the computer is an area number (1 to 9), a coarse kind of code (for example "tests" or "docs"), a "last changed" range and which area each crew member is in. Paths, folder and file names, file counts and dates never leave it. `botwarren codemap` shows the numbers-to-folders mapping locally.
+
 ## [0.7.2] - 2026-10-15
 
 OpenCode 2.x support. No change to what the agent sends: still metadata only.

@@ -4,6 +4,9 @@
  *  - classifyTitle: private task title → coarse WorkCategory
  *  - ClaudeLogTail: new lines of a Claude Code session log → tool_error activity events
  *    (reads only block types, tool names, is_error flags and timestamps)
+ *    EXCEPTION, Code map ONLY (owner opt-in, default off): when the caller hands in an `AreaProbe`, the path field of a file tool call
+ *    (file_path / notebook_path / path of Read, Edit, Write, MultiEdit, NotebookEdit, Grep, Glob, LS) is passed to that probe, which answers
+ *    with an opaque area index or null. The path is never stored, logged or put in an event; only the index leaves this function.
  */
 import { openSync, readSync, closeSync, fstatSync, statSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -52,7 +55,13 @@ export function stepFor(blockType: string, toolName?: string): StepCategory | nu
 
 const STEP_MIN_GAP_MS = 10_000;
 
-interface Tail { path: string; offset: number; partial: string; toolNames: Map<string, string>; lastStep: StepCategory | null; lastStepAt: number; ctx: ContextTracker }
+/** Code map: resolves one observed tool call's path to an area index (or null) and notes edits. The only code that ever sees the path. */
+export type AreaProbe = (rawPath: string, edit: boolean) => number | null;
+/** the file tools whose path argument may be probed, and whether they change files */
+const AREA_TOOLS: Record<string, 'edit' | 'read'> = { Edit: 'edit', Write: 'edit', MultiEdit: 'edit', NotebookEdit: 'edit', Read: 'read', Grep: 'read', Glob: 'read', LS: 'read' };
+const AREA_REPEAT_MS = 30_000;
+
+interface Tail { path: string; offset: number; partial: string; toolNames: Map<string, string>; lastStep: StepCategory | null; lastStepAt: number; ctx: ContextTracker; lastArea: number; lastAreaAt: number }
 
 const CTX_SCAN_BYTES = 512 * 1024;
 
@@ -115,22 +124,22 @@ export class ClaudeLogTail {
   }
 
   /** Returns metadata-only activity events appended since the previous call. */
-  poll(sessionKey: string, sessionId: string, instance: string, now: Date): CanonicalEventInput[] {
+  poll(sessionKey: string, sessionId: string, instance: string, now: Date, areaOf?: AreaProbe): CanonicalEventInput[] {
     const path = this.locate(sessionId);
     if (!path) return [];
-    return this.pollPath(sessionKey, path, instance, now);
+    return this.pollPath(sessionKey, path, instance, now, areaOf);
   }
 
   /**
    * Same as `poll`, for a caller that already knows the exact log file (e.g. the ship agent's
    * log-based session adapter, which has no Herdr session id). Starts at EOF on first sight.
    */
-  pollPath(sessionKey: string, path: string, instance: string, now: Date): CanonicalEventInput[] {
+  pollPath(sessionKey: string, path: string, instance: string, now: Date, areaOf?: AreaProbe): CanonicalEventInput[] {
     let t = this.tails.get(sessionKey);
     let size: number;
     try { size = statSync(path).size; } catch { return []; }
     if (!t) {
-      t = { path, offset: size, partial: '', toolNames: new Map(), lastStep: null, lastStepAt: 0, ctx: new ContextTracker() };
+      t = { path, offset: size, partial: '', toolNames: new Map(), lastStep: null, lastStepAt: 0, ctx: new ContextTracker(), lastArea: 0, lastAreaAt: 0 };
       this.tails.set(sessionKey, t);
       // first sight: the newest usage already in the log gives the starting context fill (numbers only)
       const u = readTailUsage(path);
@@ -185,6 +194,7 @@ export class ClaudeLogTail {
             });
           }
         }
+        if (areaOf && b?.type === 'tool_use' && typeof b.name === 'string' && AREA_TOOLS[b.name]) this.visit(t, b, d.timestamp, areaOf, sessionKey, instance, now, out);
         if (b?.type === 'tool_use' && typeof b.id === 'string') {
           t.toolNames.set(b.id, typeof b.name === 'string' ? b.name : 'other');
           if (t.toolNames.size > 500) t.toolNames.delete(t.toolNames.keys().next().value!);
@@ -201,6 +211,27 @@ export class ClaudeLogTail {
       }
     }
     return out;
+  }
+
+  /** Code map: one file tool call -> at most one `area` activity event (a change of area, or the same area again after 30 s). */
+  private visit(t: Tail, b: Record<string, unknown>, stamp: unknown, areaOf: AreaProbe, sessionKey: string, instance: string, now: Date, out: CanonicalEventInput[]): void {
+    const input = b.input;
+    if (!input || typeof input !== 'object') return;
+    const inp = input as Record<string, unknown>;
+    const raw = typeof inp.file_path === 'string' ? inp.file_path : typeof inp.notebook_path === 'string' ? inp.notebook_path : typeof inp.path === 'string' ? inp.path : null;
+    if (raw === null) return;
+    const kind = AREA_TOOLS[b.name as string]!;
+    const area = areaOf(raw, kind === 'edit');
+    if (area === null) return;
+    const ts = typeof stamp === 'string' && !Number.isNaN(Date.parse(stamp)) ? Date.parse(stamp) : now.getTime();
+    if (area === t.lastArea && ts - t.lastAreaAt < AREA_REPEAT_MS) return;
+    t.lastArea = area; t.lastAreaAt = ts;
+    const at = new Date(ts).toISOString();
+    out.push({
+      schemaVersion: 1, eventId: `are-${createHash('sha256').update(`${sessionKey}\0${area}\0${at}`).digest('hex').slice(0, 32)}`,
+      source: 'herdr', sourceInstance: instance, sourceEventId: `area:${at}`, occurredAt: at, observedAt: now.toISOString(),
+      type: 'session.activity', sessionKey, kind: 'area', toolCategory: toolCategory(b.name as string), area, areaAct: kind === 'edit' ? 'edit' : 'read',
+    });
   }
 
   private contextEvent(sessionKey: string, instance: string, context: ContextFill, compacted: boolean, at: string, now: Date): CanonicalEventInput {

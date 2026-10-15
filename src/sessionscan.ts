@@ -14,7 +14,8 @@
 import { closeSync, openSync, readdirSync, readSync, statSync, fstatSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import type { CanonicalEventInput } from './vendor/core/contract.ts';
-import { ClaudeLogTail } from './readers/sessionlog.ts';
+import { ClaudeLogTail, type AreaProbe } from './readers/sessionlog.ts';
+import type { CodeMapHook } from './readers/subagents.ts';
 import { SubagentWatcher, type SubagentParent } from './readers/subagents.ts';
 import type { ProjectAttributor } from './attribution.ts';
 import { sessionEnded, sessionObserved } from './events.ts';
@@ -31,6 +32,8 @@ export interface ScannerOptions {
   /** changes whenever the project list changes: sessions are attributed again at once */
   epoch?: () => number;
   maxSessions?: number;
+  /** Code map (opt-in, default off): consulted on every poll, so turning it off stops path reads at once */
+  codemap?: CodeMapHook;
 }
 
 interface Tracked {
@@ -71,7 +74,7 @@ export function readNewestCwd(path: string): string | null {
 }
 
 export class SessionScanner {
-  private readonly o: Required<Omit<ScannerOptions, 'attributor' | 'dirs' | 'instance'>> & Pick<ScannerOptions, 'attributor' | 'dirs' | 'instance'>;
+  private readonly o: Required<Omit<ScannerOptions, 'attributor' | 'dirs' | 'instance' | 'codemap'>> & Pick<ScannerOptions, 'attributor' | 'dirs' | 'instance' | 'codemap'>;
   private readonly tracked = new Map<string, Tracked>();
   private readonly tails = new Map<string, ClaudeLogTail>();
   private lastDiscover = -Infinity;
@@ -83,7 +86,7 @@ export class SessionScanner {
       workingMs: 20_000, endedMs: 30 * 60_000, reobserveMs: 120_000, discoverMs: 15_000, cwdTtlMs: 60_000, maxSessions: 200, epoch: () => 0, ...opts,
     };
     for (const d of opts.dirs) this.tails.set(d, new ClaudeLogTail(d));
-    this.subagents = new SubagentWatcher({ instance: opts.instance, source: 'collector', tailFor: (path) => this.tailFor(path) });
+    this.subagents = new SubagentWatcher({ instance: opts.instance, source: 'collector', tailFor: (path) => this.tailFor(path), ...(opts.codemap ? { codemap: opts.codemap } : {}) });
   }
 
   get subagentCount(): number { return this.subagents.trackedCount; }
@@ -118,6 +121,12 @@ export class SessionScanner {
         }
       }
     }
+  }
+
+  /** Code map: the path probe for one session, or undefined while the feature is off (then the log reader never looks at a path) */
+  private probe(projectId: string | null, cwd: string | null): AreaProbe | undefined {
+    const cm = this.o.codemap;
+    return cm && projectId !== null && cm.on() ? (raw, edit) => cm.areaOf(projectId, cwd, raw, edit) : undefined;
   }
 
   private tailFor(path: string): ClaudeLogTail | undefined {
@@ -158,13 +167,13 @@ export class SessionScanner {
       }
       if (tail) {
         try {
-          for (const e of tail.pollPath(t.key, t.path, this.o.instance, now)) out.push({ ...e, source: 'collector', sourceInstance: this.o.instance } as CanonicalEventInput);
+          for (const e of tail.pollPath(t.key, t.path, this.o.instance, now, this.probe(t.projectId, t.cwd))) out.push({ ...e, source: 'collector', sourceInstance: this.o.instance } as CanonicalEventInput);
         } catch { /* unreadable log: skip this round */ }
       }
     });
     await Promise.all(work);
     // Sub-agents of every live main (idle masters still have working sub-agents); ended masters end theirs.
-    const parents: SubagentParent[] = [...this.tracked.values()].filter((t) => t.status !== null).map((t) => ({ key: t.key, file: t.path, projectId: t.projectId }));
+    const parents: SubagentParent[] = [...this.tracked.values()].filter((t) => t.status !== null).map((t) => ({ key: t.key, file: t.path, projectId: t.projectId, cwd: t.cwd }));
     try { out.push(...this.subagents.tick(parents, now)); } catch { /* best effort */ }
     return out;
   }

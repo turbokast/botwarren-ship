@@ -7,7 +7,7 @@
 [![Licence: Apache-2.0](https://img.shields.io/badge/licence-Apache--2.0-blue.svg)](LICENSE)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/15500/badge)](https://www.bestpractices.dev/projects/15500)
 
-The ship agent runs on your own computer and turns what your AI coding agents are doing (Claude Code, Codex, Herdr, Ninox, OpenCode, Gemini CLI, ...) into a small, delayed, **metadata-only** status feed for your [Botwarren](https://botwarren.com) ship: who is working, who is waiting for you, how full a context window is, whether a build passed. It never reads or sends your prompts, code, command output, file contents or file paths.
+The ship agent runs on your own computer and turns what your AI coding agents are doing (Claude Code, Codex, Herdr, Ninox, OpenCode, Gemini CLI, ...) into a small, delayed, **metadata-only** status feed for your [Botwarren](https://botwarren.com) ship: who is working, who is waiting for you, how full a context window is, whether a build passed. It never reads or sends your prompts, code, command output, file contents or file paths (the one optional exception, Code map, is off by default and keeps paths on your computer: see below).
 
 **Optional, separate:** the agent can install exactly one other program, the Botwarren Companion (remote approvals, end-to-end encrypted), but only after you consent on your Botwarren account page, only that named component, and only from a manifest signed with the Botwarren component signing key (a separate key from the one that signs the agent's own updates, pinned separately: the agent accepts neither key for the other's job) and verified (signature, then file hash) before anything runs; it logs and tells you, and `botwarren companion remove|block` undoes or refuses it. Once it is installed, `botwarren companion pair` (also available as the command `botwarren-companion`, which the agent adds next to `botwarren`) pairs your phone; the other everyday commands (`devices`, `status`, `pause`, `resume`, `confirm`, `log`, `claude ...`) work the same way. The companion is its own open-source program with its own privacy statement and is not covered by the promise in the paragraph above, which describes this agent and stays true. See `src/component/` and [the trust page](https://botwarren.com/trust.html#companion).
 
@@ -20,7 +20,7 @@ This repository is the whole agent. The Botwarren website, hosted service and ar
 | Reads (locally, read-only) | Never reads, never sends |
 |---|---|
 | File **names** and timestamps, and a few numeric or enum fields, of the session logs and local APIs of the AI tools you use. Each adapter declares exactly what it reads: `botwarren adapters explain <id>`. | Prompts, replies, code, diffs, command lines or their output, file contents |
-| Which repository folders **you** configured, to match a session to a project you approved | Folder or file paths, repository names (unless you opt in to publishing real project names), environment values, tokens |
+| Which repository folders **you** configured, to match a session to a project you approved | Folder or file paths (the opt-in Code map reads them on your computer only, see below), repository names (unless you opt in to publishing real project names), environment values, tokens |
 
 **Sends** (only to the Botwarren service you configured, delayed 30 to 120 seconds): enum-only events: a pseudonymous worker id, a state (`working`, `idle`, `waiting_for_human`, `left`), the tool family, a coarse context-fill bucket (`low`, `mid`, `high`, `full`), build and deploy states, a project you approved, and coarsened timestamps. There is no free-text field in the event format. There is no telemetry, analytics or crash reporting.
 
@@ -47,6 +47,15 @@ flowchart LR
 ```
 
 More detail (adapter contract, packaging, the update trust chain): [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Code map (optional, off by default)
+
+When you turn on Code map, the agent reads the file paths of your agents' tool calls on your computer only, to place your crew in the right area. Paths and folder names never leave your computer. Only an area number (1 to 9), a kind (server, ui, tests, docs, infra, data, tooling or other) and how recently the area changed (a bucket: today, this week, this month, or a range of months) leave the computer, plus, for each crew member, the number of the area its latest tool call touched.
+
+* **Off means off.** With it off the log reader never looks at a path argument, no `git ls-files` or `git log` is run, nothing is kept in memory, and no area event can be projected. Turn it on in your ship settings on the website, or set `"codeMap": "on"` in `config.json` (`"off"` refuses it whatever the website says).
+* **What it reads, locally.** The tracked file list of a project's checkout (`git ls-files`) to derive at most nine areas, the date of the last commit that touched each area (`git log -1`, read-only, lowest priority, cached for 30 minutes), and the file path of a file tool call (`file_path`, `notebook_path` or `path` of Read, Edit, Write, MultiEdit, NotebookEdit, Grep, Glob, LS) that Claude Code already made. Bash commands are never parsed. Other tools are not mapped yet.
+* **Where the names stay.** Area numbers are handed out in an order derived from a random per-install salt (`private/codemap.json`, user-only), so they say nothing about folder names or sizes. Run `botwarren codemap` on the computer to see which number is which folder. That listing is served only by the token-protected local ops room.
+* **How it is tested.** `test/codemap.test.ts` and `test/adapters/canary.test.ts` plant a folder canary and a file canary in real git history and tool-call paths and fail if either reaches an event, a public projection, an outbox draft, a log line or the state file, with Code map on and off.
 
 ## Install
 

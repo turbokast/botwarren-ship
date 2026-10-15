@@ -31,6 +31,7 @@ const USAGE = `botwarren - Botwarren ship agent CLI
   botwarren pair [--repo <folder>] [--no-open]                 same as connect without a claim command (older name; --repo adds a project folder by hand)
   botwarren login [--no-open]                                  sign in to botwarren.com as owner of your ship (older installs; not needed with an account)
   botwarren adapters [explain|enable|disable <id>]             which tools Botwarren can see, and what each reads
+  botwarren codemap                                            Code map (off unless you turn it on): which area number is which folder, on this computer only
   botwarren update [status|--dry-run|--version X]              check for / apply a signed update (automatic by default)
   botwarren companion [pair|devices|status|log|claude ...|remove|block|unblock]
                                                                the optional Botwarren Companion (remote approvals): pair a phone, see its status,
@@ -64,7 +65,7 @@ async function main(argv: string[]): Promise<number> {
   // these work before the ship is configured (installers call them first)
   if (cmd === 'verify-release') return runVerifyRelease(rest);
   if (cmd === 'update') return runUpdate(rest);
-  if (!setUp && ['run', 'status', 'ops', 'pause', 'resume', 'login'].includes(cmd)) {
+  if (!setUp && ['run', 'status', 'ops', 'pause', 'resume', 'login', 'codemap'].includes(cmd)) {
     const note = existsSync(join(dirname(process.env.BOTWARREN_SHIP_CONFIG ?? configPath()), DISCONNECTED_NOTE));
     process.stderr.write(note ? 'This computer was disconnected from the website. Connect it again with a new command from https://botwarren.com/get (or run: botwarren connect).\n' : 'This computer is not connected to a ship yet. Get your command at https://botwarren.com/get (or run: botwarren connect).\n');
     return 1;
@@ -129,6 +130,23 @@ async function main(argv: string[]): Promise<number> {
         process.stdout.write(cmd === 'pause' ? 'Publishing paused. Nothing new will leave your machine.\n' : 'Publishing resumed.\n');
         return 0;
       } catch (e) { process.stderr.write(`failed: ${(e as Error).message}\n`); return 1; }
+    }
+    case 'codemap': {
+      try {
+        const r = (await api(cfg, 'GET', 'codemap')) as { on: boolean; projects: { project: string; areas: { i: number; kind: string; stale: string; files: number; folders: string[] }[] }[] };
+        if (!r.on) {
+          process.stdout.write('Code map is OFF (the default). While it is off, the agent never reads a file path.\nTurn it on in your ship settings at https://botwarren.com/account (or set "codeMap": "on" in config.json).\n');
+          return 0;
+        }
+        process.stdout.write('Code map is ON. This list is shown on THIS computer only: only the area number, its kind and how recently it changed ever leave it.\n');
+        if (!r.projects.length) process.stdout.write('No project has been mapped yet (it needs a project with git history; the first map takes a minute).\n');
+        for (const p of r.projects) {
+          process.stdout.write(`\nProject ${p.project}\n`);
+          for (const a of p.areas) process.stdout.write(`  Area ${a.i}  ${a.kind.padEnd(8)} ${a.stale.padEnd(8)} ${String(a.files).padStart(5)} files  ${a.folders.slice(0, 4).join(', ')}${a.folders.length > 4 ? ` +${a.folders.length - 4} more` : ''}\n`);
+        }
+        process.stdout.write('\nName areas (optional) on botwarren.com/account; a name only shows publicly while "Show real project names" is on.\n');
+        return 0;
+      } catch (e) { process.stderr.write(`Ship agent not reachable on 127.0.0.1:${cfg.opsPort}: ${(e as Error).message}\n`); return 1; }
     }
     case 'login': return runLogin(cfg, rest);
     case 'adapters': return runAdapters(cfg, rest);
