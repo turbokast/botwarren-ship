@@ -49,6 +49,13 @@ export function agentReportUrl(publishUrl: string): string {
   return u.toString();
 }
 
+/** `<ship origin>/internal/companion` from the configured replica URL */
+export function companionUrl(publishUrl: string): string {
+  const u = new URL(publishUrl);
+  u.pathname = '/internal/companion'; u.search = ''; u.hash = '';
+  return u.toString();
+}
+
 export const WIPE_AFTER_COUNT = 3;
 export const WIPE_AFTER_MS = 5 * 60_000;
 export function shouldWipe(u: { count: number; since: number | null }, nowMs: number, minCount = WIPE_AFTER_COUNT, minMs = WIPE_AFTER_MS): boolean {

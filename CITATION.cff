@@ -2,8 +2,8 @@ cff-version: 1.2.0
 message: If you use this software, please cite it as below.
 title: Botwarren ship agent
 type: software
-version: 0.6.0
-date-released: 2026-10-14
+version: 0.7.0
+date-released: 2026-10-15
 license: Apache-2.0
 repository-code: https://github.com/turbokast/botwarren-ship
 url: https://botwarren.com

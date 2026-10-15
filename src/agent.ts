@@ -32,7 +32,8 @@ import { applyOnboardingDelay } from './onboarding.ts';
 import { VERSION } from './version.ts';
 import { startUpdateService } from './update/service.ts';
 import { ProjectDiscovery, discoveryFile } from './discovery.ts';
-import { agentReportUrl, applyAdapterOverrides, buildAgentReport, postAgentReport, reportSignature, shouldWipe } from './cloudlink.ts';
+import { startComponentService, type ComponentService } from './component/service.ts';
+import { agentReportUrl, applyAdapterOverrides, buildAgentReport, companionUrl, postAgentReport, reportSignature, shouldWipe } from './cloudlink.ts';
 
 /** A random id for THIS installation, kept in its private settings (it is not derived from anything about the computer). */
 export function laneId(svc: { store: { getSetting(k: string): string | undefined; setSetting(k: string, v: string): void } }): string {
@@ -150,6 +151,8 @@ export async function startAgent(cfg: ShipConfig, opts: AgentOptions = {}): Prom
   const savedAdapterSettings = new Map<AgentAdapterId, boolean | 'auto'>();
   let lookRejected: string | null = null;
   let projectsRejected = false;
+  /** the optional Botwarren Companion component (component/): driven only by the website's install/remove directive, gated by install.ts */
+  let components: ComponentService | null = null;
 
   /** the owner's project choices changed (or real names switched): rebuild the allowlist and the public manifest together */
   const rebuild = (): void => {
@@ -192,6 +195,7 @@ export async function startAgent(cfg: ShipConfig, opts: AgentOptions = {}): Prom
       // tools switched off on the website (they can only be turned off, or back to the configured setting)
       const off = parseAdaptersOff(settings?.adapters);
       if (off && applyAdapterOverrides(entries, off, savedAdapterSettings)) { log(`tools switched off from the website: ${off.length ? off.join(', ') : 'none'}`); changed = true; }
+      components?.onSettings(settings as { companion?: unknown } | null);
       if (changed) setTimeout(() => void replicator.tick(), 0).unref();
     },
   });
@@ -293,6 +297,11 @@ export async function startAgent(cfg: ShipConfig, opts: AgentOptions = {}): Prom
     env: process.env, config: cfg.updates, log, isIdle: () => Date.now() - lastActivityAt > 60_000,
     restart: () => (opts.onRestartForUpdate ?? (() => log('update staged; restart the agent to apply it')))(),
   });
+  const root = process.env.BOTWARREN_HOME || join(cfg.dataDir, 'home');
+  if (opts.replicate !== false) components = startComponentService({
+    root, baseUrl: updates.policy.baseUrl, agentVersion: VERSION, cloudUrl: companionUrl(publishUrl(cfg.replicaUrl)), secret, log, env: process.env,
+    ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}), allowDevKey: process.env.BOTWARREN_UPDATE_ALLOW_DEV_KEY === '1',
+  });
   log(`ship agent started: ship=${cfg.shipId} projects=${live.map((p) => p.id).join(',') || 'none yet (noticed from your sessions)'} ops=127.0.0.1:${cfg.opsPort} delay=${svc.delaySeconds}s replica=${new URL(cfg.replicaUrl).origin} adapters=${adapters.statuses().length}`);
 
   return {
@@ -300,6 +309,7 @@ export async function startAgent(cfg: ShipConfig, opts: AgentOptions = {}): Prom
     stop: async () => {
       for (const t of timers) clearInterval(t);
       updates.stop();
+      components?.stop();
       await adapters.stop();
       discovery.flush();
       svc.stop(); replicator.stop();

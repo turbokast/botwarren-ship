@@ -6,6 +6,32 @@ A release is only built from a dated entry in this file: the release workflow ta
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-15
+
+The optional, separate Botwarren Companion (remote approvals) can now be installed by the agent, under a strict gate. The agent's own promise is unchanged: it still reads and sends metadata only, and the Companion is a different program with its own privacy statement.
+
+### Added
+
+- `botwarren companion [status|remove|block|unblock]`: look at the optional Botwarren Companion on this computer, remove it, or refuse it for good. `botwarren companion block` also forgets the recorded consent, and `BOTWARREN_DISABLE_COMPONENTS=1` switches the whole mechanism off.
+- **The install gate for the Companion** (`src/component/`). The agent installs exactly one named component, `companion`, and only when all of this holds:
+  - you consented on your Botwarren account page (the website's instruction to the agent is two words, `install` or `remove`, and your consent time; it cannot name a URL, a version, a file or a command, and anything more makes the instruction invalid);
+  - the component manifest is signed with a Botwarren **component signing key** that is a different key from the one that signs the agent's own updates, and the agent pins the two in **separate sets**: the component installer accepts only component keys and the update verifier accepts only update keys, so neither key's signature is ever accepted for the other's job (a keys document cannot register a component key as an update key either). On top of that, a component manifest has its own signature domain (`botwarren-component-v1`), so a signed agent manifest can never be presented as a component manifest or the other way round. The trust epoch, the anti-rollback counter, expiry and the list of blocked versions apply as for agent updates, and a revocation of the component key by the recovery keys is honoured;
+  - the bundle's size and SHA-256 match the signed manifest before the archive is opened, only four allow-listed files (`companion.mjs`, `VERSION`, `LICENSE`, `NOTICE`) are extracted by the path-safe reader, and a self-test passes before anything else runs.
+  The manifest address comes from this installation's own configuration (the same downloads host as agent updates), never from the website. An install leaves a log line and a `NOTICE.txt` next to the component; the component is removed by `botwarren companion remove`, by "Turn off" on your account page, or by the account being switched off.
+- While the Companion is installed the agent keeps its background process running and reports to your ship's service only the Companion's **public** key (so the service can sign a relay enrolment ticket for it) and whether the install worked (a fixed code and a version). It never sends anything the Companion reads or any device information.
+
+### Changed
+
+- The README explains the optional component and its limits in plain words, documents connecting through the website's one-line command and `botwarren uninstall`, and adds the Companion to the privacy statement (a third kind of network traffic that happens only after your consent, and how to switch it off). The status line now says 0.7.x, and the OpenSSF Best Practices badge (project 15500) is shown.
+- `docs/ARCHITECTURE.md` gains a section on connecting, projects, remote settings, the owner report and disconnecting.
+- The vendored public contract (`src/vendor/core/`) now also carries the multi-deck ship plan types and the loosely typed `companion` field of the replica settings. These are schema types only: the agent's events and the public projection are unchanged, and nothing new is published.
+
+### Fixed
+
+- The release workflow's publish job now downloads the release notes artifact it uses. The 0.6.0 GitHub Release step failed without it and the release was finished by hand from the run's artifacts.
+- Two more byte-order-mark matches (`connect` and `uninstall`) use the explicit escape `\uFEFF` instead of an invisible literal character. Behaviour is unchanged.
+- An unused helper in the pairing code was removed.
+
 ## [0.6.0] - 2026-10-14
 
 Zero-touch onboarding: install once, and everything else happens on the website.

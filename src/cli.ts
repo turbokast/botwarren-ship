@@ -17,6 +17,7 @@ import { configPath } from './paths.ts';
 import { runAdapters } from './adapters/cli.ts';
 import { runUpdate, runVerifyRelease } from './update/cli.ts';
 import { VERSION } from './version.ts';
+import { runCompanion } from './component/cli.ts';
 
 const USAGE = `botwarren - Botwarren ship agent CLI
 
@@ -31,6 +32,7 @@ const USAGE = `botwarren - Botwarren ship agent CLI
   botwarren login [--no-open]                                  sign in to botwarren.com as owner of your ship (older installs; not needed with an account)
   botwarren adapters [explain|enable|disable <id>]             which tools Botwarren can see, and what each reads
   botwarren update [status|--dry-run|--version X]              check for / apply a signed update (automatic by default)
+  botwarren companion [status|remove|block|unblock]            the optional Botwarren Companion (remote approvals): look at it, remove it, or refuse it
   botwarren --version                                          show the ship agent version
 `;
 
@@ -128,6 +130,7 @@ async function main(argv: string[]): Promise<number> {
     }
     case 'login': return runLogin(cfg, rest);
     case 'adapters': return runAdapters(cfg, rest);
+    case 'companion': return runCompanion(cfg, rest);
     default: process.stderr.write(USAGE); return 2;
   }
 }

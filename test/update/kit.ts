@@ -14,9 +14,9 @@ export const mkTmp = (): string => mkdtempSync(join(tmpdir(), 'bw-upd-'));
 export const rmTmp = (p: string): void => rmSync(p, { recursive: true, force: true });
 
 export interface TestKey { pinned: PinnedKey; pem: string }
-export function makeKey(id = 'test-1', dev = false): TestKey {
+export function makeKey(id = 'test-1', dev = false, role?: PinnedKey['role']): TestKey {
   const { publicKey, privateKey } = generateKeyPairSync('ed25519');
-  return { pinned: { id, spki: publicKey.export({ type: 'spki', format: 'der' }).toString('base64'), dev }, pem: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString() };
+  return { pinned: { id, spki: publicKey.export({ type: 'spki', format: 'der' }).toString('base64'), dev, ...(role ? { role } : {}) }, pem: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString() };
 }
 
 export const sha256 = (b: Buffer): string => createHash('sha256').update(b).digest('hex');

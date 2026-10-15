@@ -117,9 +117,9 @@ describe('validateLoginUrl', () => {
 });
 
 describe('version', () => {
-  it('is 0.6.0 in package.json and version.ts', () => {
+  it('is 0.7.0 in package.json and version.ts', () => {
     const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
-    expect(pkg.version).toBe('0.6.0');
+    expect(pkg.version).toBe('0.7.0');
     expect(VERSION).toBe(pkg.version);
   });
 });

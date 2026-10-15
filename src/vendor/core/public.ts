@@ -14,6 +14,7 @@
 import { z } from 'zod';
 import { ShipPlanV2 } from './shipplan.ts';
 export * from './shipplan.ts';
+export * from './decks.ts';
 
 /** Project slug (per ship). */
 export const PublicProject = z.string().regex(/^[a-z][a-z0-9-]{1,30}[a-z0-9]$/);
@@ -63,6 +64,11 @@ export const ReplicaSettings = z.object({
   projects: z.unknown().optional(),
   delaySeconds: z.unknown().optional(),
   adapters: z.unknown().optional(),
+  /**
+   * The Botwarren Companion install directive (opt-in, separate component). Typed loosely and validated by
+   * the agent, which accepts ONLY `{ want: 'install' | 'remove', consent: <ISO time> }`: never a URL, a version to fetch or a command.
+   */
+  companion: z.unknown().optional(),
 });
 export type ReplicaSettings = z.infer<typeof ReplicaSettings>;
 

@@ -17,7 +17,7 @@
  */
 import { createPrivateKey, createPublicKey, sign as edSign, verify as edVerify } from 'node:crypto';
 import { z } from 'zod';
-import { RECOVERY_THRESHOLD, recoveryKeys, type PinnedKey } from './keys.ts';
+import { COMPONENT_PUBLIC_KEYS, RECOVERY_THRESHOLD, recoveryKeys, type PinnedKey } from './keys.ts';
 import type { AddedKey, TrustState } from './state.ts';
 
 export const KEYS_DOMAIN = Buffer.from('botwarren-keys-v1\0', 'utf8');
@@ -60,9 +60,11 @@ export function verifyKeysDoc(bytes: Buffer, sigText: string, o: { pinned: reado
   if (signers.size < RECOVERY_THRESHOLD) return { ok: false, code: 'insufficient_signatures' }; // nothing is parsed before the threshold is met
   let doc: KeysDoc;
   try { doc = KeysDoc.parse(JSON.parse(bytes.toString('utf8'))); } catch { return { ok: false, code: 'malformed' }; }
-  const pinnedIds = new Set(o.pinned.map((k) => k.id));
+  // the component keys are pinned too: a document may not redefine one of their ids, nor register a component key as an agent release key
+  const pinnedIds = new Set([...o.pinned, ...COMPONENT_PUBLIC_KEYS].map((k) => k.id));
+  const componentSpkis = new Set(COMPONENT_PUBLIC_KEYS.map((k) => k.spki));
   const recoveryIds = new Set(recoveryKeys(o.pinned).map((k) => k.id));
-  if (doc.keys.some((k) => pinnedIds.has(k.id)) || doc.revoked.some((id) => recoveryIds.has(id))) return { ok: false, code: 'conflicts_with_pinned' };
+  if (doc.keys.some((k) => pinnedIds.has(k.id) || componentSpkis.has(k.spki)) || doc.revoked.some((id) => recoveryIds.has(id))) return { ok: false, code: 'conflicts_with_pinned' };
   if (new Set(doc.keys.map((k) => k.id)).size !== doc.keys.length) return { ok: false, code: 'malformed' };
   try { for (const k of doc.keys) if (spkiKey(k.spki).asymmetricKeyType !== 'ed25519') return { ok: false, code: 'malformed' }; } catch { return { ok: false, code: 'malformed' }; }
   return { ok: true, doc, signers: [...signers].sort() };

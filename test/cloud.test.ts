@@ -186,7 +186,7 @@ describe('agent identity', () => {
     try {
       await t.agent.replicator.tick();
       expect(t.sent[0]!.headers['x-botwarren-agent']).toBe(VERSION);
-      expect(VERSION).toBe('0.6.0');
+      expect(VERSION).toBe('0.7.0');
       expect(JSON.stringify(t.sent[0]!.meta)).not.toContain(VERSION);
     } finally { await t.agent.stop(); }
   });
