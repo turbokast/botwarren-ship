@@ -13,6 +13,8 @@
  */
 import { z } from 'zod';
 import { ShipPlanV2 } from './shipplan.ts';
+import { MODEL_LINES, MODEL_MAKERS } from './models.ts';
+export { classifyModel, MODEL_LINES, MODEL_MAKERS, type ModelId } from './models.ts';
 import { AreaAct, AreaIndex, PublicAreas, type PublicArea } from './codemap.ts';
 export * from './shipplan.ts';
 export * from './codemap.ts';
@@ -145,6 +147,33 @@ const common = {
   demo: z.boolean(),
 };
 
+/**
+ * Model identity (metadata only, never an exact version or account detail): the MAKER sets the crew member's livery and the
+ * model LINE its body type. Both are closed allowlists so no free-form string ever reaches the public site. Anything not
+ * recognised is `other` (standard chassis / the maker's plain livery): the station never guesses a model it did not observe.
+ * The tables live in `models.ts`; extend them there, never by passing raw ids through.
+ */
+export const ModelMaker = z.enum(MODEL_MAKERS);
+export type ModelMaker = z.infer<typeof ModelMaker>;
+export const ModelFamily = z.enum(MODEL_LINES);
+export type ModelFamily = z.infer<typeof ModelFamily>;
+/** Reasoning effort as reported by the harness (Claude Code `effort`, Codex `reasoning_effort`); absent when not observed. */
+export const Effort = z.enum(['low', 'medium', 'high', 'xhigh', 'max']);
+export type Effort = z.infer<typeof Effort>;
+
+/** Normalise a harness effort string; Codex `minimal` reads as low, unknown values are dropped (never guessed). */
+export function effortLevel(raw: string | null | undefined): Effort | undefined {
+  if (!raw) return undefined;
+  const r = raw.toLowerCase().trim().replace(/[\s_]+/g, '-');
+  if ((Effort.options as readonly string[]).includes(r)) return r as Effort;
+  // OpenAI none/minimal, Codex "Light", Gemini MINIMAL: the lowest rung. Codex "Ultra" is Max plus a sub-agent swarm.
+  if (/^(none|off|minimal|min|light|lite)$/.test(r)) return 'low';
+  if (/^(med|mid)$/.test(r)) return 'medium';
+  if (/^(x-?high|extra-?high|very-?high)$/.test(r)) return 'xhigh';
+  if (/^(ultra|maximum|deep-?think)$/.test(r)) return 'max';
+  return undefined;
+}
+
 export const PublicEvent = z.discriminatedUnion('kind', [
   z.object({
     ...common,
@@ -158,7 +187,9 @@ export const PublicEvent = z.discriminatedUnion('kind', [
     /** crew structure (pseudonymous): sub-agent / pairing partner of `parent` */
     role: z.enum(['main', 'subagent', 'pair']).optional(),
     parent: Key('w').optional(),
-    model: z.enum(['opus', 'sonnet', 'haiku', 'gpt', 'other']).optional(),
+    maker: ModelMaker.optional(),
+    model: ModelFamily.optional(),
+    effort: Effort.optional(),
   }).strict(),
   z.object({
     ...common,
@@ -270,7 +301,7 @@ export type PublicEvent = z.infer<typeof PublicEvent>;
 export type PublicEventDraft = PublicEvent extends infer T ? (T extends PublicEvent ? Omit<T, 'seq' | 'publishedAt'> : never) : never;
 
 /** Public world state, reduced only from public events (used by public server + browser). */
-export interface PublicWorker { worker: string; project: PublicProject; harness: string; state: WorkerState; since: string; lastAt: string; certainty: string; demo: boolean; focus: WorkerFocus; lastMishapAt: string | null; step?: WorkerStep; stepAt?: string; recentSteps?: { step: WorkerStep; at: string }[]; role?: 'main' | 'subagent' | 'pair'; parent?: string; model?: string; context?: ContextFill; compactedAt?: string; /** Code map: the area this crew member's latest tool call touched (index) and when (the renderer only walks there while working and the call is recent) */ area?: number; areaAt?: string; areaAct?: 'edit' | 'read' | 'other'; /** when this crew member was first seen (survives state changes): the "on shift" clock */ born?: string }
+export interface PublicWorker { worker: string; project: PublicProject; harness: string; state: WorkerState; since: string; lastAt: string; certainty: string; demo: boolean; focus: WorkerFocus; lastMishapAt: string | null; step?: WorkerStep; stepAt?: string; recentSteps?: { step: WorkerStep; at: string }[]; role?: 'main' | 'subagent' | 'pair'; parent?: string; maker?: ModelMaker; model?: string; effort?: Effort; context?: ContextFill; compactedAt?: string; /** Code map: the area this crew member's latest tool call touched (index) and when (the renderer only walks there while working and the call is recent) */ area?: number; areaAt?: string; areaAct?: 'edit' | 'read' | 'other'; /** when this crew member was first seen (survives state changes): the "on shift" clock */ born?: string }
 export interface PublicPipeline { pipeline: string; project: PublicProject; provider: string; purpose: PublicPurpose; status: PublicCiStatus; lastAt: string; jobs: Record<string, { category: string; status: PublicCiStatus; retried: boolean }>; demo: boolean }
 export interface PublicDeploy { deploy: string; project: PublicProject; phase: PublicDeployPhase; lastAt: string; demo: boolean }
 export interface PublicProjectSize { sizeTier: number; linesApprox: number; lastAt: string }
@@ -310,6 +341,8 @@ export function applyPublic(w: PublicWorld, e: PublicEvent): boolean {
         ...(e.role ? { role: e.role } : cur?.role ? { role: cur.role } : {}),
         ...(e.parent ? { parent: e.parent } : cur?.parent ? { parent: cur.parent } : {}),
         ...(e.model ? { model: e.model } : cur?.model ? { model: cur.model } : {}),
+        ...(e.maker ? { maker: e.maker } : cur?.maker ? { maker: cur.maker } : {}),
+        ...(e.effort ? { effort: e.effort } : cur?.effort ? { effort: cur.effort } : {}),
         ...(cur?.context ? { context: cur.context } : {}),
         ...(cur?.compactedAt ? { compactedAt: cur.compactedAt } : {}),
         ...(cur?.area ? { area: cur.area, areaAt: cur.areaAt!, areaAct: cur.areaAct! } : {}),

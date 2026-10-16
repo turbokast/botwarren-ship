@@ -2,6 +2,8 @@
  * Owner-approved (2026-10-13) METADATA-ONLY readers. Everything private is reduced to enums
  * locally and the source text is discarded immediately; it is never stored or sent.
  *  - classifyTitle: private task title → coarse WorkCategory
+ *  - readTailIdentity / identityOfLine: the model (classified to maker + line by the closed tables in core `models.ts`; the raw id is dropped here)
+ *    and the reasoning effort of the newest assistant line (top-level `effort`, `requestedModel`, `message.model` only; no message content)
  *  - ClaudeLogTail: new lines of a Claude Code session log → tool_error activity events
  *    (reads only block types, tool names, is_error flags and timestamps)
  *    EXCEPTION, Code map ONLY (owner opt-in, default off): when the caller hands in an `AreaProbe`, the path field of a file tool call
@@ -12,7 +14,7 @@ import { openSync, readSync, closeSync, fstatSync, statSync, readdirSync, exists
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
-import type { CanonicalEventInput, ContextFill, StepCategory, ToolCategory, WorkCategory } from '../vendor/core/contract.ts';
+import { classifyModel, effortLevel, type CanonicalEventInput, type ContextFill, type Effort, type ModelFamily, type ModelMaker, type StepCategory, type ToolCategory, type WorkCategory } from '../vendor/core/contract.ts';
 import { ContextTracker, fillFor, usedTokens } from './contextfill.ts';
 
 const RULES: [WorkCategory, RegExp][] = [
@@ -94,10 +96,68 @@ export function readTailUsage(path: string): { used: number; model: string | und
   } catch { return null; } finally { closeSync(fd); }
 }
 
+/** What a Claude Code transcript says about the model that is running the session. Absent fields were not observed. */
+export interface LogIdentity { maker?: ModelMaker; model?: ModelFamily; effort?: Effort }
+
+/**
+ * Model + effort of ONE transcript line (an object already parsed from JSON). Uses only the top-level `effort` (or `perTurnEffort`),
+ * `message.model` (the model that answered; `<synthetic>` is Claude Code's own placeholder and is ignored) and `requestedModel`.
+ * The raw model id is classified here and never returned.
+ */
+export function identityOfLine(d: Record<string, unknown>): LogIdentity {
+  const out: LogIdentity = {};
+  const msg = d.message && typeof d.message === 'object' ? (d.message as Record<string, unknown>) : undefined;
+  const usable = (v: unknown): string | undefined => (typeof v === 'string' && v.length > 0 && v.length <= 200 && v !== '<synthetic>' ? v : undefined);
+  const id = classifyModel(usable(msg?.model) ?? usable(d.requestedModel));
+  if (id) { out.maker = id.maker; out.model = id.model; }
+  const eff = effortLevel(typeof d.effort === 'string' ? d.effort : typeof d.perTurnEffort === 'string' ? d.perTurnEffort : undefined);
+  if (eff) out.effort = eff;
+  return out;
+}
+
+const IDENT_WINDOWS = [256 * 1024, 2 * 1024 * 1024];
+
+/**
+ * Newest model and effort in the tail of a transcript (bounded read; the newest ASSISTANT line wins, as effort can change per turn).
+ * Returns {} when none is found.
+ */
+export function readTailIdentity(path: string): LogIdentity {
+  let fd: number;
+  try { fd = openSync(path, 'r'); } catch { return {}; }
+  try {
+    const size = fstatSync(fd).size;
+    const out: LogIdentity = {};
+    for (const w of IDENT_WINDOWS) {
+      const len = Math.min(size, w);
+      const buf = Buffer.alloc(len);
+      readSync(fd, buf, 0, len, size - len);
+      const lines = buf.toString('utf8').split('\n');
+      if (size - len > 0) lines.shift(); // first line is probably cut mid-way
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i]!;
+        if (!line.includes('"type":"assistant"')) continue;
+        let d: Record<string, unknown>;
+        try { d = JSON.parse(line) as Record<string, unknown>; } catch { continue; }
+        if (d.type !== 'assistant') continue;
+        const x = identityOfLine(d);
+        if (out.model === undefined && x.model) { out.maker = x.maker!; out.model = x.model; }
+        if (out.effort === undefined && x.effort) out.effort = x.effort;
+        if (out.model !== undefined && out.effort !== undefined) return out;
+      }
+      if (len === size) break;
+    }
+    return out;
+  } catch { return {}; } finally { closeSync(fd); }
+}
+
+/** Same identity? (for change detection) */
+export const sameIdentity = (a: LogIdentity, b: LogIdentity): boolean => a.maker === b.maker && a.model === b.model && a.effort === b.effort;
+
 /** Incremental, bounded tail of Claude Code session logs. Starts at EOF (never replays history). */
 export class ClaudeLogTail {
   private tails = new Map<string, Tail>();
   private pathCache = new Map<string, string | null>();
+  private identities = new Map<string, { at: number; size: number; ident: LogIdentity }>();
   readonly root: string;
   constructor(root = join(homedir(), '.claude', 'projects')) { this.root = root; }
 
@@ -242,5 +302,23 @@ export class ClaudeLogTail {
     };
   }
 
-  forget(sessionKey: string): void { this.tails.delete(sessionKey); }
+  /**
+   * The session's current model + effort, from the newest assistant line of its log. Cached: the tail is re-read only when the file
+   * grew AND at least `minGapMs` passed since the last read (so a busy session costs one bounded read per gap, not one per poll).
+   */
+  identity(sessionKey: string, path: string, nowMs: number, minGapMs = 10_000): LogIdentity {
+    const hit = this.identities.get(sessionKey);
+    if (hit && nowMs - hit.at < minGapMs) return hit.ident;
+    let size: number;
+    try { size = statSync(path).size; } catch { return hit?.ident ?? {}; }
+    if (hit && hit.size === size) { hit.at = nowMs; return hit.ident; }
+    const ident = readTailIdentity(path);
+    // keep what was last observed when a re-read finds nothing (e.g. only a long tool result at the tail)
+    const merged: LogIdentity = { ...(hit?.ident ?? {}), ...ident };
+    this.identities.set(sessionKey, { at: nowMs, size, ident: merged });
+    if (this.identities.size > 500) this.identities.delete(this.identities.keys().next().value!);
+    return merged;
+  }
+
+  forget(sessionKey: string): void { this.tails.delete(sessionKey); this.identities.delete(sessionKey); }
 }

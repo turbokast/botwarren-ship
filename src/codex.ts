@@ -2,22 +2,28 @@
  * Codex pairing adapter (METADATA ONLY). Codex CLI writes rollout logs to
  *   <codexDir>/YYYY/MM/DD/rollout-*.jsonl
  * whose first line is {type:'session_meta', payload:{id, cwd, originator, source, cli_version, ...}}.
- * We use ONLY payload.id / cwd / originator / source (plus file mtime). The rest of that line
- * (e.g. base_instructions) and every later line (messages) is never read for any purpose, kept, or emitted.
+ * We use ONLY payload.id / cwd / originator / source / reasoning_effort (plus file mtime). The rest of that line
+ * (e.g. base_instructions) is never read for any purpose, kept, or emitted.
  *
- * harness 'codex', model 'gpt', certainty inferred. Role 'pair' (parentKey = a Claude master) when an
+ * ONE exception among the later lines (owner-approved metadata-only, 2026-10-16): the NEWEST `turn_context` line (bounded tail read) is parsed
+ * and only its `payload.model` and `payload.effort` (or `payload.collaboration_mode.settings.model` / `.reasoning_effort`) are taken. The model is
+ * classified at once into maker + line by core `classifyModel` and the raw id dropped; the effort goes through `effortLevel`. Every other line
+ * (messages, tool calls, instructions) is never read.
+ *
+ * harness 'codex', model maker/line + effort only when observed in the log (absent until the first turn), certainty inferred. Role 'pair' (parentKey = a Claude master) when an
  * active Claude MAIN session of the same project was written within the last 2 minutes; the choice is the
  * most recently written master and is sticky for the Codex session's life. Otherwise role 'main'.
  * `codex exec` runs (short-lived) end 2 min after their last write; interactive Codex sessions after 30 min.
  */
 import { closeSync, fstatSync, openSync, readSync, readdirSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import type { CanonicalEventInput } from './vendor/core/contract.ts';
+import { classifyModel, effortLevel, type CanonicalEventInput } from './vendor/core/contract.ts';
 import type { ProjectAttributor } from './attribution.ts';
 import type { MainInfo } from './sessionscan.ts';
 import { sessionEnded, sessionObserved, type Role } from './events.ts';
+import { sameIdentity, type LogIdentity } from './readers/sessionlog.ts';
 
-export interface CodexMeta { id?: string; cwd?: string; originator?: string; source?: string }
+export interface CodexMeta { id?: string; cwd?: string; originator?: string; source?: string; /** normalised reasoning effort of the session_meta line, a fallback until a turn_context exists */ effort?: LogIdentity['effort'] }
 
 const HEAD_WINDOWS = [256 * 1024, 2 * 1024 * 1024];
 
@@ -46,10 +52,53 @@ export function readCodexMeta(path: string): CodexMeta | null {
       const cwd = str(p.cwd, 1024); if (cwd) out.cwd = cwd;
       const originator = str(p.originator, 64); if (originator) out.originator = originator;
       const source = str(p.source, 64); if (source) out.source = source; // may be an object in newer versions: then ignored
+      const eff = effortLevel(str(p.reasoning_effort, 32)); if (eff) out.effort = eff;
       return out;
     }
     return null;
   } catch { return null; } finally { closeSync(fd); }
+}
+
+const TURN_WINDOWS = [256 * 1024, 2 * 1024 * 1024];
+
+/** Model + effort of ONE parsed `turn_context` line. Only the four named fields are looked at. */
+export function identityOfTurnContext(d: { type?: unknown; payload?: unknown }): LogIdentity {
+  const out: LogIdentity = {};
+  if (d.type !== 'turn_context' || typeof d.payload !== 'object' || d.payload === null) return out;
+  const p = d.payload as Record<string, unknown>;
+  const s = p.collaboration_mode && typeof p.collaboration_mode === 'object' ? ((p.collaboration_mode as Record<string, unknown>).settings as Record<string, unknown> | undefined) : undefined;
+  const str = (v: unknown): string | undefined => (typeof v === 'string' && v.length > 0 && v.length <= 200 ? v : undefined);
+  const id = classifyModel(str(p.model) ?? str(s?.model));
+  if (id) { out.maker = id.maker; out.model = id.model; }
+  const eff = effortLevel(str(p.effort) ?? str(s?.reasoning_effort));
+  if (eff) out.effort = eff;
+  return out;
+}
+
+/** Newest model + effort in a rollout's tail (bounded; the newest turn_context wins: the model and effort can change between turns). {} when none. */
+export function readCodexIdentity(path: string): LogIdentity {
+  let fd: number;
+  try { fd = openSync(path, 'r'); } catch { return {}; }
+  try {
+    const size = fstatSync(fd).size;
+    for (const w of TURN_WINDOWS) {
+      const len = Math.min(size, w);
+      const buf = Buffer.alloc(len);
+      readSync(fd, buf, 0, len, size - len);
+      const lines = buf.toString('utf8').split('\n');
+      if (size - len > 0) lines.shift(); // first line is probably cut mid-way
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i]!;
+        if (!line.includes('"turn_context"')) continue;
+        let d: { type?: unknown; payload?: unknown };
+        try { d = JSON.parse(line) as typeof d; } catch { continue; }
+        const x = identityOfTurnContext(d);
+        if (x.model !== undefined || x.effort !== undefined) return x;
+      }
+      if (len === size) break;
+    }
+    return {};
+  } catch { return {}; } finally { closeSync(fd); }
 }
 
 export interface CodexOptions {
@@ -62,6 +111,8 @@ export interface CodexOptions {
   reobserveMs?: number;
   discoverMs?: number;
   pairWindowMs?: number;
+  /** minimum gap between two reads of a rollout's tail for its model/effort */
+  identMs?: number;
   /** changes whenever the project list changes: sessions are attributed again at once */
   epoch?: () => number;
   maxSessions?: number;
@@ -70,6 +121,7 @@ export interface CodexOptions {
 interface CTracked {
   key: string; path: string; mtimeMs: number; meta: CodexMeta | null; metaTries: number; execLike: boolean;
   status: 'working' | 'idle' | null; projectId: string | null; emittedProject?: string | null; role: Role; parentKey: string | undefined; lastEmit: number; attributed: boolean;
+  ident: LogIdentity; emittedIdent?: LogIdentity; identAt: number; identMtime: number;
 }
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -94,7 +146,7 @@ export class CodexScanner {
   private seenEpoch = 0;
 
   constructor(opts: CodexOptions) {
-    this.o = { workingMs: 20_000, execEndedMs: 120_000, endedMs: 30 * 60_000, reobserveMs: 120_000, discoverMs: 10_000, pairWindowMs: 120_000, maxSessions: 100, epoch: () => 0, ...opts };
+    this.o = { workingMs: 20_000, execEndedMs: 120_000, endedMs: 30 * 60_000, reobserveMs: 120_000, discoverMs: 10_000, pairWindowMs: 120_000, identMs: 10_000, maxSessions: 100, epoch: () => 0, ...opts };
   }
   get trackedCount(): number { return this.tracked.size; }
 
@@ -113,7 +165,7 @@ export class CodexScanner {
           try { m = statSync(path).mtimeMs; } catch { continue; }
           if (nowMs - m > this.o.endedMs || this.stale.get(path) === m) continue;
           const key = `codex:${basename(e.name, '.jsonl')}`.slice(0, 128);
-          this.tracked.set(path, { key, path, mtimeMs: m, meta: null, metaTries: 0, execLike: false, status: null, projectId: null, role: 'main', parentKey: undefined, lastEmit: 0, attributed: false });
+          this.tracked.set(path, { key, path, mtimeMs: m, meta: null, metaTries: 0, execLike: false, status: null, projectId: null, role: 'main', parentKey: undefined, lastEmit: 0, attributed: false, ident: {}, identAt: -Infinity, identMtime: -1 });
         }
       }
     }
@@ -164,11 +216,18 @@ export class CodexScanner {
         }
         if (best) { t.role = 'pair'; t.parentKey = best.key; roleChanged = true; }
       }
-      if (roleChanged || t.status !== status || t.lastEmit === 0 || t.emittedProject !== t.projectId || nowMs - t.lastEmit >= this.o.reobserveMs) {
-        t.emittedProject = t.projectId;
+      // model + effort: re-read the newest turn_context only when the rollout grew, at most every `identMs`
+      if (t.identMtime !== mtime && nowMs - t.identAt >= this.o.identMs) {
+        t.identAt = nowMs; t.identMtime = mtime;
+        const found = readCodexIdentity(t.path);
+        t.ident = { ...(t.meta?.effort && t.ident.effort === undefined ? { effort: t.meta.effort } : {}), ...t.ident, ...found };
+      } else if (t.ident.effort === undefined && t.meta?.effort) t.ident = { ...t.ident, effort: t.meta.effort };
+      const identChanged = t.emittedIdent === undefined || !sameIdentity(t.emittedIdent, t.ident);
+      if (roleChanged || identChanged || t.status !== status || t.lastEmit === 0 || t.emittedProject !== t.projectId || nowMs - t.lastEmit >= this.o.reobserveMs) {
+        t.emittedProject = t.projectId; t.emittedIdent = { ...t.ident };
         t.status = status; t.lastEmit = nowMs;
         out.push(sessionObserved({
-          instance: this.o.instance, key: t.key, status, projectId: t.projectId, at: now, harness: 'codex', role: t.role, model: 'gpt',
+          instance: this.o.instance, key: t.key, status, projectId: t.projectId, at: now, harness: 'codex', role: t.role, ...t.ident,
           ...(t.parentKey ? { parentKey: t.parentKey } : {}),
           priv: { cwd: t.meta?.cwd ?? null, log: basename(t.path), originator: t.meta?.originator ?? null, source: t.meta?.source ?? null, attribution: t.projectId ? 'matched' : 'unattributed' },
         }));

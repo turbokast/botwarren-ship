@@ -12,14 +12,13 @@
  * no observations.
  *
  * Kept: status/activity -> our status enum, agent_type -> tool, orchestrator link -> role/parent, context_used_pct ->
- * 4-step bucket, model -> family, claude_session_id -> CORRELATION ONLY (joins the Claude log adapter's session),
+ * 4-step bucket, model -> maker + line (core classifyModel; the raw id is dropped here), reasoning effort level (if the row has one), claude_session_id -> CORRELATION ONLY (joins the Claude log adapter's session),
  * workspace_path -> local cwd for attribution. Dropped always: name, repo, summary, activity_note, catalogue_path,
  * pr_number/pr_id, pid, cost_usd, gate_status, machine_id and every unknown field. PR/CI state is kept as a local-only
  * lifecycle enum and is never published as CI telemetry.
  */
 import { posix, win32 } from 'node:path';
-import { bucketContext } from '../vendor/core/contract.ts';
-import { modelFamily } from '../readers/subagents.ts';
+import { bucketContext, classifyModel, effortLevel } from '../vendor/core/contract.ts';
 import { ADAPTER_API_VERSION, safeErrorCode, type Adapter, type AdapterContext, type AdapterManifest, type AdapterSettings, type DetectEnv, type Detection, type Local, type Observation, type ToolId } from './api.ts';
 import type { Host } from '../paths.ts';
 
@@ -105,7 +104,7 @@ export class NinoxAdapter implements Adapter {
       id: 'ninox', apiVersion: ADAPTER_API_VERSION, version: '1.0.0', platforms: ['darwin', 'linux'],
       reads: [
         { kind: 'file', target: ninoxConfigPath(host), keeps: 'only the numeric `port` setting' },
-        { kind: 'loopback-http', target: 'GET /api/v1/sessions', keeps: 'session id, status, activity, agent type, orchestrator link, model family, context %, Claude session id, workspace path (local only). Names, repo, summaries, notes, costs and PR numbers are dropped.' },
+        { kind: 'loopback-http', target: 'GET /api/v1/sessions', keeps: 'session id, status, activity, agent type, orchestrator link, model maker and line (the exact model name is dropped on this computer), reasoning effort level, context %, Claude session id, workspace path (local only). Names, repo, summaries, notes, costs and PR numbers are dropped.' },
         { kind: 'loopback-http', target: 'GET /api/v1/events', keeps: 'only the event type, as a hint to poll sooner; payloads are never parsed' },
       ],
       capabilities: { state: true, toolCategory: false, errors: false, subagents: false, tokens: true, hierarchy: true },
@@ -157,19 +156,21 @@ export class NinoxAdapter implements Adapter {
       const orch = typeof r.orchestrator_id === 'string' && ID_OK.test(r.orchestrator_id) && live.has(r.orchestrator_id) && r.orchestrator_id !== id ? r.orchestrator_id : null;
       const cs = typeof r.claude_session_id === 'string' && UUIDISH.test(r.claude_session_id) ? r.claude_session_id : null;
       const cwd = typeof r.workspace_path === 'string' && r.workspace_path.length > 0 && r.workspace_path.length <= 1024 ? r.workspace_path : null;
-      const model = tool === 'codex' ? 'gpt' : typeof r.model === 'string' ? modelFamily(r.model) : undefined;
+      // only what Ninox reports: no model string -> no model (never guessed from the agent type)
+      const ident = typeof r.model === 'string' && r.model.length <= 200 ? classifyModel(r.model) : undefined;
+      const effort = effortLevel(typeof r.reasoning_effort === 'string' ? r.reasoning_effort : typeof r.effort === 'string' ? r.effort : undefined);
       const pct = typeof r.context_used_pct === 'number' ? r.context_used_pct : null;
       const fill = pct !== null && pct >= 0 && pct <= 100 ? bucketContext(pct / 100) : 'unknown';
       const lifecycle: Local['lifecycle'] = LIFECYCLE.has(status) ? (status as Local['lifecycle']) : 'other';
       const projectId = await ctx.attribute(cwd, nowMs);
-      const sig = `${st}|${tool}|${orch ?? ''}|${model ?? ''}|${projectId ?? ''}|${lifecycle}`;
+      const sig = `${st}|${tool}|${orch ?? ''}|${ident?.maker ?? ''}/${ident?.model ?? ''}|${effort ?? ''}|${projectId ?? ''}|${lifecycle}`;
       const prev = this.seen.get(key);
       if (!prev || prev.sig !== sig || nowMs - prev.lastEmit >= this.reobserveMs) {
         out.push({
           kind: 'session', key, tool, harness, status: st, projectId, certainty: 'observed',
           correlate: [{ type: 'ninox-session', id }, ...(cs ? [{ type: 'claude-session' as const, id: cs }] : [])],
           ...(orch ? { role: 'subagent' as const, parentKey: `ninox:${orch}` } : {}),
-          ...(model ? { model } : {}),
+          ...(ident ? { maker: ident.maker, model: ident.model } : {}), ...(effort ? { effort } : {}),
           local: { ...(cwd ? { cwd } : {}), lifecycle },
         });
       }

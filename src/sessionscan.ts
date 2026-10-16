@@ -14,7 +14,7 @@
 import { closeSync, openSync, readdirSync, readSync, statSync, fstatSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import type { CanonicalEventInput } from './vendor/core/contract.ts';
-import { ClaudeLogTail, type AreaProbe } from './readers/sessionlog.ts';
+import { ClaudeLogTail, readTailIdentity, sameIdentity, type AreaProbe, type LogIdentity } from './readers/sessionlog.ts';
 import type { CodeMapHook } from './readers/subagents.ts';
 import { SubagentWatcher, type SubagentParent } from './readers/subagents.ts';
 import type { ProjectAttributor } from './attribution.ts';
@@ -38,7 +38,7 @@ export interface ScannerOptions {
 
 interface Tracked {
   key: string; path: string; status: 'working' | 'idle' | null; projectId: string | null;
-  lastEmit: number; emittedProject?: string | null; cwd: string | null; cwdAt: number; resolved: boolean; mtimeMs: number;
+  lastEmit: number; emittedProject?: string | null; ident: LogIdentity; emittedIdent?: LogIdentity; cwd: string | null; cwdAt: number; resolved: boolean; mtimeMs: number;
 }
 
 /** What the Codex pairing logic needs to know about a live Claude MAIN session. */
@@ -105,7 +105,7 @@ export class SessionScanner {
       let m: number;
       try { m = statSync(path).mtimeMs; } catch { return; }
       if (nowMs - m > this.o.endedMs) return;
-      this.tracked.set(path, { key: key.slice(0, 128), path, status: null, projectId: null, lastEmit: 0, cwd: null, cwdAt: -Infinity, resolved: false, mtimeMs: m });
+      this.tracked.set(path, { key: key.slice(0, 128), path, status: null, projectId: null, lastEmit: 0, ident: {}, cwd: null, cwdAt: -Infinity, resolved: false, mtimeMs: m });
       void root;
     };
     for (const root of this.o.dirs) {
@@ -160,10 +160,13 @@ export class SessionScanner {
         const a = await this.o.attributor.attribute(cwd, nowMs);
         t.projectId = a.projectId; t.resolved = cwd !== null || t.resolved;
       }
-      if (t.status !== status || t.lastEmit === 0 || t.emittedProject !== t.projectId || nowMs - t.lastEmit >= this.o.reobserveMs) {
-        t.emittedProject = t.projectId;
+      // model + effort of the newest assistant line (effort can change turn by turn): a change re-observes the session, a cached bounded read at most every 10 s
+      t.ident = tail ? tail.identity(t.key, t.path, nowMs) : readTailIdentity(t.path);
+      const identChanged = t.emittedIdent === undefined || !sameIdentity(t.emittedIdent, t.ident);
+      if (t.status !== status || t.lastEmit === 0 || t.emittedProject !== t.projectId || identChanged || nowMs - t.lastEmit >= this.o.reobserveMs) {
+        t.emittedProject = t.projectId; t.emittedIdent = { ...t.ident };
         t.status = status; t.lastEmit = nowMs;
-        out.push(sessionObserved({ instance: this.o.instance, key: t.key, status, projectId: t.projectId, at: now, priv: { cwd: t.cwd, log: basename(t.path), attribution: t.projectId ? 'matched' : 'unattributed' } }));
+        out.push(sessionObserved({ instance: this.o.instance, key: t.key, status, projectId: t.projectId, at: now, ...t.ident, priv: { cwd: t.cwd, log: basename(t.path), attribution: t.projectId ? 'matched' : 'unattributed' } }));
       }
       if (tail) {
         try {

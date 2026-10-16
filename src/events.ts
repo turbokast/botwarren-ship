@@ -1,6 +1,6 @@
 /** Canonical event builders shared by the session adapter and the run wrapper. Metadata only. */
 import { createHash } from 'node:crypto';
-import type { CanonicalEventInput } from './vendor/core/contract.ts';
+import type { CanonicalEventInput, Effort, ModelFamily, ModelMaker } from './vendor/core/contract.ts';
 
 export const sha = (...parts: string[]) => createHash('sha256').update(parts.join('\0')).digest('hex');
 
@@ -8,7 +8,7 @@ export type Role = 'main' | 'subagent' | 'pair';
 
 export function sessionObserved(o: {
   instance: string; key: string; status: 'working' | 'idle'; projectId: string | null; at: Date; priv: Record<string, string | number | boolean | null>;
-  harness?: 'claude' | 'codex'; role?: Role; parentKey?: string; model?: 'opus' | 'sonnet' | 'haiku' | 'gpt' | 'other';
+  harness?: 'claude' | 'codex'; role?: Role; parentKey?: string; maker?: ModelMaker; model?: ModelFamily; effort?: Effort;
 }): CanonicalEventInput {
   const at = o.at.toISOString();
   return {
@@ -20,7 +20,9 @@ export function sessionObserved(o: {
     workCategory: 'unknown',
     role: o.role ?? 'main',
     ...(o.parentKey ? { parentKey: o.parentKey } : {}),
+    ...(o.maker ? { maker: o.maker } : {}),
     ...(o.model ? { model: o.model } : {}),
+    ...(o.effort ? { effort: o.effort } : {}),
     private: o.priv,
   };
 }

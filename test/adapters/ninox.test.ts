@@ -87,6 +87,19 @@ describe('Ninox hard allowlist', () => {
 });
 
 describe('NinoxAdapter projection', () => {
+  it('classifies the reported model to maker + line (never the raw id), reads an effort only if the row has one, and invents no model for a codex row without one', async () => {
+    const { host } = await ninoxHost([
+      row({ id: 'k1', claude_session_id: undefined, model: 'kimi-k2-thinking-20261001', effort: 'High' }),
+      row({ id: 'c1', claude_session_id: undefined, agent_type: 'codex', model: undefined }),
+    ]);
+    const evs = await host.tick(NOW);
+    const s = sessions(evs);
+    const k = s.find((e) => e.sessionKey === 'ninox:k1')!;
+    expect(k).toMatchObject({ maker: 'moonshot', model: 'kimi', effort: 'high' });
+    const c = s.find((e) => e.sessionKey === 'ninox:c1')!;
+    expect(c.maker).toBeUndefined(); expect(c.model).toBeUndefined(); expect(c.effort).toBeUndefined();
+    expect(JSON.stringify(evs)).not.toContain('20261001');
+  });
   it('maps status/activity/hierarchy/context, joins on claude_session_id, and drops every content field', async () => {
     const { host, logs } = await ninoxHost([
       row({ id: 'orch', activity: 'idle', status: 'working', claude_session_id: undefined }),
@@ -97,7 +110,7 @@ describe('NinoxAdapter projection', () => {
     const s = sessions(evs);
     expect(s).toHaveLength(2);
     const worker = s.find((e) => e.sessionKey === `claude:${UUID}`)!;
-    expect(worker).toMatchObject({ status: 'blocked', role: 'subagent', parentKey: 'ninox:orch', harness: 'claude', model: 'opus', projectId: 'demo1', attribution: { certainty: 'observed' } });
+    expect(worker).toMatchObject({ status: 'blocked', role: 'subagent', parentKey: 'ninox:orch', harness: 'claude', maker: 'anthropic', model: 'opus', projectId: 'demo1', attribution: { certainty: 'observed' } });
     expect(worker.private).toMatchObject({ lifecycle: 'working', cwd: '/work/game', tool: 'claude-code' });
     const ctxEv = evs.filter((e) => e.type === 'session.activity');
     expect(ctxEv[0]).toMatchObject({ kind: 'context', context: 'high' }); // 70% -> high

@@ -1,10 +1,10 @@
-import { utimesSync } from 'node:fs';
+import { appendFileSync, utimesSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { CanonicalEvent, type CanonicalEventInput } from '../src/vendor/core/contract.ts';
 import { ProjectAttributor } from '../src/attribution.ts';
-import { CodexScanner, candidateDays, readCodexMeta } from '../src/codex.ts';
+import { CodexScanner, candidateDays, readCodexIdentity, readCodexMeta } from '../src/codex.ts';
 import type { MainInfo } from '../src/sessionscan.ts';
-import { SECRET_CODE, SECRET_INSTRUCTIONS, SECRET_PROMPT, tmp, writeCodex } from './helpers.ts';
+import { SECRET_CODE, SECRET_INSTRUCTIONS, SECRET_PROMPT, tmp, turnContext, writeCodex } from './helpers.ts';
 
 const NOW = new Date('2026-10-13T12:00:00.000Z');
 const ago = (ms: number) => new Date(NOW.getTime() - ms);
@@ -38,15 +38,15 @@ describe('Codex meta', () => {
 });
 
 describe('CodexScanner', () => {
-  it('emits harness=codex, model=gpt, inferred, attributed from the meta cwd (Windows path, case-insensitive)', async () => {
+  it('emits harness=codex, the observed model maker/line + effort, inferred, attributed from the meta cwd (Windows path, case-insensitive)', async () => {
     const root = tmp();
     const s = scanner(root);
-    writeCodex(root, NOW, 'a', exec('019aaaaa-0001', WIN_CWD.toUpperCase() + '\\sub'), ago(3000));
+    writeCodex(root, NOW, 'a', exec('019aaaaa-0001', WIN_CWD.toUpperCase() + '\\sub'), ago(3000), turnContext('gpt-6.1-sol', 'high'));
     const evs = await s.tick(NOW, []);
     for (const e of evs) expect(CanonicalEvent.safeParse(e).success).toBe(true);
     const o = obs(evs);
     expect(o).toHaveLength(1);
-    expect(o[0]).toMatchObject({ sessionKey: 'codex:019aaaaa-0001', harness: 'codex', model: 'gpt', status: 'working', projectId: 'demo1', role: 'main', attribution: { method: 'cwd_registry', certainty: 'inferred' } });
+    expect(o[0]).toMatchObject({ sessionKey: 'codex:019aaaaa-0001', harness: 'codex', maker: 'openai', model: 'sol', effort: 'high', status: 'working', projectId: 'demo1', role: 'main', attribution: { method: 'cwd_registry', certainty: 'inferred' } });
     expect(o[0]!.parentKey).toBeUndefined();
   });
 
@@ -127,5 +127,43 @@ describe('CodexScanner', () => {
     expect(all.length).toBeGreaterThan(1);
     const blob = JSON.stringify(all);
     for (const x of [SECRET_INSTRUCTIONS, SECRET_PROMPT, SECRET_CODE, 'BASE_INSTRUCTIONS']) expect(blob).not.toContain(x);
+  });
+});
+
+describe('Codex model + effort (newest turn_context only)', () => {
+  it('reads maker/line and effort of the NEWEST turn_context, from payload or collaboration_mode, never the instructions', () => {
+    const root = tmp();
+    const f = writeCodex(root, NOW, 'a', exec('019aaaaa-1111'), ago(1000), turnContext('gpt-6-astra', 'low') + turnContext('gpt-6.1-sol-20261001', 'Ultra'));
+    const id = readCodexIdentity(f);
+    expect(id).toEqual({ maker: 'openai', model: 'sol', effort: 'max' });
+    expect(JSON.stringify(id)).not.toContain('20261001');
+    expect(JSON.stringify(id)).not.toContain(SECRET_INSTRUCTIONS);
+    expect(JSON.stringify(id)).not.toContain(SECRET_PROMPT);
+  });
+  it('nothing observed stays absent; session_meta reasoning_effort is a fallback for effort only', () => {
+    const root = tmp();
+    const f = writeCodex(root, NOW, 'b', exec('019aaaaa-2222'), ago(1000));
+    expect(readCodexIdentity(f)).toEqual({});
+    const g = writeCodex(root, NOW, 'c', { ...exec('019aaaaa-3333'), reasoning_effort: 'minimal' }, ago(1000));
+    expect(readCodexMeta(g)?.effort).toBe('low');
+  });
+  it('no turn_context yet -> no model; re-observes once a turn is written and again when effort changes, never otherwise', async () => {
+    const root = tmp();
+    const s = scanner(root);
+    const f = writeCodex(root, NOW, 'a', cli('019aaaaa-4444'), ago(3000));
+    const first = obs(await s.tick(NOW, []));
+    expect(first).toHaveLength(1);
+    expect(first[0]!.model).toBeUndefined(); expect(first[0]!.maker).toBeUndefined(); expect(first[0]!.effort).toBeUndefined();
+    appendFileSync(f, turnContext('gpt-6.1-sol', 'medium')); utimesSync(f, at(1000), at(1000));
+    const second = obs(await s.tick(at(12_000), []));
+    expect(second).toHaveLength(1);
+    expect(second[0]).toMatchObject({ maker: 'openai', model: 'sol', effort: 'medium' });
+    utimesSync(f, at(23_000), at(23_000)); // written again, same model and effort
+    expect(obs(await s.tick(at(24_000), []))).toHaveLength(0);
+    appendFileSync(f, turnContext('gpt-6.1-sol', 'high')); utimesSync(f, at(35_000), at(35_000));
+    const third = obs(await s.tick(at(36_000), []));
+    expect(third).toHaveLength(1);
+    expect(third[0]).toMatchObject({ effort: 'high' });
+    for (const e of third) expect(CanonicalEvent.safeParse(e).success).toBe(true);
   });
 });

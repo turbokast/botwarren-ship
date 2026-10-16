@@ -38,8 +38,8 @@ Privacy by construction (enforced by the host, not by adapter authors):
 
 | Adapter | Reads | Verification |
 |---|---|---|
-| `claude-code` | session log file names and mtimes, cwd of the newest lines, tool names, error flags, model family, numeric token counts (bucketed) | live |
-| `codex` | rollout file names and mtimes; only `id`, `cwd`, `originator`, `source` of the first line | live |
+| `claude-code` | session log file names and mtimes, cwd of the newest lines, tool names, error flags, model maker and line (exact name dropped locally), reasoning effort level, numeric token counts (bucketed) | live |
+| `codex` | rollout file names and mtimes; only `id`, `cwd`, `originator`, `source` of the first line, plus model (reduced to maker + line locally) and reasoning effort of the newest `turn_context` line | live |
 | `herdr` | `agent.list` and `ping` on the Herdr socket; named sessions; sessions are never ended while Herdr is unreachable | fixture; Windows unverified |
 | `ninox` | `GET /api/v1/sessions` and the events stream (as a wake-up hint only) on `127.0.0.1`; the response shape is verified before the port is trusted | fixture; unverified against a live install |
 | `opencode` | 2.x: `GET /api/session/active`, `/api/session`, `/api/permission/request`, `/api/form` (only the ids of waiting sessions); 1.x: `GET /session/status` and `GET /session`. Uses `OPENCODE_SERVER_PASSWORD` from the agent's environment if set | 2.x routes and login behaviour live on an empty server, session rows from its API document; 1.x from documentation |

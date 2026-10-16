@@ -48,14 +48,14 @@ export function writeSub(root: string, proj: string, masterId: string, agentId: 
 }
 
 /** <root>/YYYY/MM/DD/rollout-*.jsonl whose first line is a session_meta carrying a secret base_instructions. */
-export function writeCodex(root: string, day: Date, name: string, payload: Record<string, unknown>, mtime: Date): string {
+export function writeCodex(root: string, day: Date, name: string, payload: Record<string, unknown>, mtime: Date, extra = ''): string {
   const two = (n: number) => String(n).padStart(2, '0');
   const dir = join(root, String(day.getFullYear()), two(day.getMonth() + 1), two(day.getDate()));
   mkdirSync(dir, { recursive: true });
   const p = join(dir, `rollout-${name}.jsonl`);
   const meta = line({ type: 'session_meta', payload: { cli_version: '0.9.9', base_instructions: { text: SECRET_INSTRUCTIONS + ' '.repeat(20_000) }, ...payload } });
   const msg = line({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: `${SECRET_PROMPT} ${SECRET_CODE}` }] } });
-  writeFileSync(p, meta + msg);
+  writeFileSync(p, meta + msg + extra);
   utimesSync(p, mtime, mtime);
   return p;
 }
@@ -68,4 +68,18 @@ export async function freePort(): Promise<number> {
     s.once('error', reject);
     s.listen(0, '127.0.0.1', () => { const { port } = s.address() as { port: number }; s.close(() => resolve(port)); });
   });
+}
+
+/** A Claude Code assistant line as the real transcripts write it: top-level `effort` + `requestedModel`, `message.model`, secret content that must never leave. */
+export function assistantLine(o: { model?: string; requested?: string; effort?: string; at?: Date; cwd?: string }): string {
+  return line({
+    cwd: o.cwd ?? '/w', type: 'assistant', timestamp: (o.at ?? new Date(2_000_000)).toISOString(),
+    ...(o.requested ? { requestedModel: o.requested } : {}), ...(o.effort ? { effort: o.effort, perTurnEffort: o.effort } : {}),
+    message: { role: 'assistant', ...(o.model ? { model: o.model } : {}), content: [{ type: 'text', text: SECRET_PROMPT }] },
+  });
+}
+
+/** A Codex rollout `turn_context` line (model + effort at the top of the payload and again inside collaboration_mode), plus content that must never leave. */
+export function turnContext(model: string, effort: string): string {
+  return line({ type: 'turn_context', payload: { turn_id: 't', cwd: '/w', model, effort, collaboration_mode: { mode: 'default', settings: { model, reasoning_effort: effort, developer_instructions: SECRET_INSTRUCTIONS } }, summary: SECRET_PROMPT } });
 }

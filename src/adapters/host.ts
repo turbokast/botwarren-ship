@@ -296,7 +296,11 @@ export class AdapterHost {
       parentKey = this.corr.get(`key:${raw}`) ?? raw;
       if (parentKey === rec.key) parentKey = undefined;
     }
-    const model = this.firstBy(rec, FIELD_ORDER, (s) => s.obs.model);
+    // model identity: maker and line always come from the SAME source (the most authoritative one that observed a model: the session logs first),
+    // so a livery never pairs with another tool's body type. Effort is picked on its own: any source that observed it, same order.
+    const idSrc = this.firstBy(rec, FIELD_ORDER, (s) => (s.obs.model !== undefined || s.obs.maker !== undefined ? s : undefined));
+    const maker = idSrc?.obs.maker; const model = idSrc?.obs.model;
+    const effort = this.firstBy(rec, FIELD_ORDER, (s) => s.obs.effort);
     const projectId = this.firstBy(rec, FIELD_ORDER, (s) => s.obs.projectId ?? undefined) ?? null;
     const certainty = srcs.some((s) => s.obs.certainty === 'observed') ? 'observed' : 'inferred';
     const workCategory = this.firstBy(rec, FIELD_ORDER, (s) => (s.obs.workCategory && s.obs.workCategory !== 'unknown' ? s.obs.workCategory : undefined)) ?? 'unknown';
@@ -305,7 +309,7 @@ export class AdapterHost {
       for (const [k, v] of Object.entries(s.obs.local ?? {})) if (!(k in acc) && v !== undefined) acc[k] = v as string | number;
       return acc;
     }, {});
-    const sig = JSON.stringify([status, harness, role, parentKey ?? '', model ?? '', projectId, certainty, workCategory, tool, srcs.map((s) => s.adapter).sort()]);
+    const sig = JSON.stringify([status, harness, role, parentKey ?? '', maker ?? '', model ?? '', effort ?? '', projectId, certainty, workCategory, tool, srcs.map((s) => s.adapter).sort()]);
     if (sig === rec.sig && nowMs - rec.lastEmit < this.o.reobserveMs) return null;
     if (rec.born === 0) rec.born = nowMs;
     rec.sig = sig; rec.lastEmit = nowMs;
@@ -315,7 +319,7 @@ export class AdapterHost {
       sourceEventId: `${rec.key}@${at}`.slice(0, 256), occurredAt: at, observedAt: at, type: 'session.observed',
       sessionKey: rec.key, harness, status, projectId,
       attribution: projectId ? { method: 'cwd_registry', certainty } : { method: 'none', certainty: 'unknown' },
-      workCategory, role, ...(parentKey ? { parentKey } : {}), ...(model ? { model } : {}),
+      workCategory, role, ...(parentKey ? { parentKey } : {}), ...(maker ? { maker } : {}), ...(model ? { model } : {}), ...(effort ? { effort } : {}),
       private: { ...local, tool, adapters: [...new Set(srcs.map((s) => s.adapter))].sort().join('+'), attribution: projectId ? 'matched' : 'unattributed' },
     } as CanonicalEventInput;
   }

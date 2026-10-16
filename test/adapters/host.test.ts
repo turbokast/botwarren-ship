@@ -171,3 +171,30 @@ describe('AdapterHost: merge and dedupe', () => {
     expect(act[0]).toMatchObject({ sessionKey: `claude:${UUID}`, kind: 'tool_error', toolCategory: 'shell' });
   });
 });
+
+describe('AdapterHost: model identity merge', () => {
+  it('maker and line come from ONE source (the logs first); effort from any source that has it; a change re-emits', async () => {
+    const claudeRounds: Observation[][] = [
+      [sess({ key: `claude:${UUID}`, maker: 'anthropic', model: 'opus', correlate: [{ type: 'claude-session', id: UUID }], local: { cwd: '/work/game' } })],
+      [sess({ key: `claude:${UUID}`, maker: 'anthropic', model: 'opus', effort: 'high', correlate: [{ type: 'claude-session', id: UUID }], local: { cwd: '/work/game' } })],
+    ];
+    const ninox = fake('ninox', [[sess({ key: 'ninox:n1', tool: 'other', maker: 'moonshot', model: 'kimi', effort: 'low', correlate: [{ type: 'ninox-session', id: 'n1' }, { type: 'claude-session', id: UUID }] })]]);
+    const { host } = run([fake('claude-code', claudeRounds), ninox]);
+    const first = sessions(await host.tick(NOW));
+    expect(first).toHaveLength(1);
+    // maker/line from the log adapter, never mixed with ninox's; only ninox has an effort -> ninox's
+    expect(first[0]).toMatchObject({ maker: 'anthropic', model: 'opus', effort: 'low' });
+    const second = sessions(await host.tick(at(5)));
+    expect(second).toHaveLength(1);
+    expect(second[0]).toMatchObject({ maker: 'anthropic', model: 'opus', effort: 'high' });
+    expect(sessions(await host.tick(at(10)))).toHaveLength(0);
+  });
+  it('rejects values outside the closed tables (no raw model id can ride an observation)', async () => {
+    const { host } = run([fake('claude-code', [[
+      { ...sess({ key: 'claude:aaaaaaaa-9' }), model: 'claude-opus-5-5-20261001' } as unknown as Observation,
+      { ...sess({ key: 'claude:aaaaaaaa-8' }), effort: 'ultra-deluxe' } as unknown as Observation,
+    ]])]);
+    expect(sessions(await host.tick(NOW))).toHaveLength(0);
+    expect(host.statuses()[0]!.rejected).toBe(2);
+  });
+});

@@ -80,7 +80,9 @@ export function projectPublic(e: CanonicalEvent, policy: ProjectionPolicy): Proj
         ...(e.workCategory !== 'unknown' ? { focus: e.workCategory } : {}),
         ...(e.role !== 'main' ? { role: e.role } : {}),
         ...(e.parentKey ? { parent: `w-${policy.pseudonym('w', e.parentKey)}` } : {}),
+        ...(e.maker ? { maker: e.maker } : {}),
         ...(e.model ? { model: e.model } : {}),
+        ...(e.effort ? { effort: e.effort } : {}),
       };
       break;
     }

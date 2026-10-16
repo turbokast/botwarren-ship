@@ -10,7 +10,7 @@
  * Public data is derived only through `projectPublic` in projection.ts.
  */
 import { z } from 'zod';
-import { ContextFill } from './public.ts';
+import { ContextFill, Effort, ModelFamily, ModelMaker } from './public.ts';
 import { AreaAct, AreaIndex, PublicAreas } from './codemap.ts';
 
 export const SCHEMA_VERSION = 1 as const;
@@ -89,8 +89,11 @@ export const SessionObserved = z.object({
   /** crew structure: a sub-agent or pairing partner points at its master session (private key) */
   role: z.enum(['main', 'subagent', 'pair']).default('main'),
   parentKey: EntityKey.optional(),
-  /** coarse model family (metadata only) */
-  model: z.enum(['opus', 'sonnet', 'haiku', 'gpt', 'other']).optional(),
+  /** model maker + line from the closed tables in models.ts (metadata only; never the raw id) */
+  maker: ModelMaker.optional(),
+  model: ModelFamily.optional(),
+  /** reasoning effort as reported by the harness (metadata only) */
+  effort: Effort.optional(),
 });
 
 /** Metadata-only activity from local session logs (e.g. a tool call returned an error). */

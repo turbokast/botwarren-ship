@@ -13,7 +13,7 @@
  */
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { AreaAct, AreaIndex, ContextFill, Harness, HerdrStatus, StepCategory, ToolCategory, WorkCategory } from '../vendor/core/contract.ts';
+import { AreaAct, AreaIndex, ContextFill, Effort, Harness, ModelFamily, ModelMaker, HerdrStatus, StepCategory, ToolCategory, WorkCategory } from '../vendor/core/contract.ts';
 import type { Host } from '../paths.ts';
 
 export const ADAPTER_API_VERSION = 1 as const;
@@ -62,7 +62,11 @@ export const SessionObs = z.object({
   status: HerdrStatus,
   role: z.enum(['main', 'subagent', 'pair']).default('main'),
   parentKey: Key.optional(),
-  model: z.enum(['opus', 'sonnet', 'haiku', 'gpt', 'other']).optional(),
+  /** model maker + line, classified by the closed tables in core models.ts (never a raw id); absent = not observed */
+  maker: ModelMaker.optional(),
+  model: ModelFamily.optional(),
+  /** reasoning effort as reported by the tool; absent = not observed */
+  effort: Effort.optional(),
   /** a configured project id, obtained from `ctx.attribute()`; the core re-checks it */
   projectId: z.string().min(2).max(32).nullable(),
   certainty: z.enum(['observed', 'inferred']),

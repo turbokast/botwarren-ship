@@ -10,7 +10,7 @@ import { startAgent } from '../src/agent.ts';
 import { resolveConfig } from '../src/config.ts';
 import { dataPaths } from '../src/paths.ts';
 import { makePoster, runWrapped } from '../src/runner.ts';
-import { SECRET_CODE, SECRET_INSTRUCTIONS, SECRET_PROMPT, SECRET_TOKEN, tmp, writeCodex, writeSession, writeSub, freePort } from './helpers.ts';
+import { SECRET_CODE, SECRET_INSTRUCTIONS, SECRET_PROMPT, SECRET_TOKEN, tmp, turnContext, writeCodex, writeSession, writeSub, freePort } from './helpers.ts';
 import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
 
@@ -69,7 +69,7 @@ describe('crew: master + sub-agents + Codex pair', () => {
     writeSession(root, 'p', MASTER, WIN_CWD, new Date(clock - 1000));
     writeSub(root, 'p', MASTER, 'h1', WIN_CWD, new Date(clock - 1000), 'claude-haiku-4-5');
     writeSub(root, 'p', MASTER, 'h2', WIN_CWD, new Date(clock - 2000), 'haiku');
-    writeCodex(codexRoot, new Date(clock), 'x', { id: '019abcde-0001-0002', cwd: WIN_CWD, originator: 'codex_exec', source: 'exec' }, new Date(clock - 1000));
+    writeCodex(codexRoot, new Date(clock), 'x', { id: '019abcde-0001-0002', cwd: WIN_CWD, originator: 'codex_exec', source: 'exec' }, new Date(clock - 1000), turnContext('gpt-6.1-sol', 'medium'));
     const now = new Date(clock);
     const evs = [...(await scanner.tick(now)), ...(await codex.tick(now, scanner.mains()))];
     expect(svc.ingest(evs)).toMatchObject({ accepted: 4, quarantined: 0 });
@@ -80,8 +80,8 @@ describe('crew: master + sub-agents + Codex pair', () => {
     const subs = pub.filter((e) => e.role === 'subagent');
     const pair = pub.find((e) => e.harness === 'codex')!;
     expect(subs).toHaveLength(2);
-    for (const e of subs) expect(e).toMatchObject({ model: 'haiku', parent: master.worker, certainty: 'inferred' });
-    expect(pair).toMatchObject({ role: 'pair', model: 'gpt', parent: master.worker, certainty: 'inferred' });
+    for (const e of subs) expect(e).toMatchObject({ maker: 'anthropic', model: 'haiku', parent: master.worker, certainty: 'inferred' });
+    expect(pair).toMatchObject({ role: 'pair', maker: 'openai', model: 'sol', effort: 'medium', parent: master.worker, certainty: 'inferred' });
     const blob = JSON.stringify(pub);
     for (const x of [SECRET_PROMPT, SECRET_TOKEN, SECRET_CODE, SECRET_INSTRUCTIONS, 'Users', 'agent-h1', MASTER, '019abcde']) expect(blob).not.toContain(x);
     svc.stop();

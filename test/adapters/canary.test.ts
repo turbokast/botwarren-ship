@@ -14,7 +14,7 @@ import { HerdrAdapter } from '../../src/adapters/herdr.ts';
 import { NinoxAdapter } from '../../src/adapters/ninox.ts';
 import { OpenCodeAdapter } from '../../src/adapters/opencode.ts';
 import { GeminiCliAdapter, projectHash } from '../../src/adapters/gemini.ts';
-import { line, writeCodex, writeSession } from '../helpers.ts';
+import { assistantLine, line, turnContext, writeCodex, writeSession } from '../helpers.ts';
 import type { Host } from '../../src/paths.ts';
 import { fakeOpencodeV2, v2Bodies } from './opencode-fixtures.ts';
 import { CANARY_CONTENT, CANARY_PATH, assertNoLeak, fakeHerdr, fakeHttp, herdrHost, linuxHost, makeHost, mkTmp, rmTmp } from './kit.ts';
@@ -182,6 +182,22 @@ describe('canary redaction: no adapter lets a secret reach an event, a public pr
       assertNoLeak(all, logs, ['demo1']);
     });
   }
+
+  it('model ids: the raw id (versions, dated snapshots, third-party names, anything riding in the id) never reaches an event, a public projection or a log; only maker/line/effort do', async () => {
+    const home = mkTmp(); cleanup.push(() => rmTmp(home));
+    const claudeRoot = join(home, '.claude', 'projects'); const codexRoot = join(home, '.codex', 'sessions');
+    writeSession(claudeRoot, 'p', UUID, REPO, new Date(NOW.getTime() - 3000), assistantLine({ cwd: REPO, model: `claude-opus-5-5-20261001-${CANARY_CONTENT}`, requested: 'claude-opus-5-5-20261001', effort: 'high' }));
+    writeSession(claudeRoot, 'p', '1b1c2d3e-aaaa-bbbb-cccc-0123456789ab', REPO, new Date(NOW.getTime() - 3000), assistantLine({ cwd: REPO, model: `kimi-k2-thinking-${CANARY_CONTENT}`, effort: 'medium' }));
+    writeCodex(codexRoot, NOW, 'x', { id: '019abcde-0001-0002', cwd: REPO, originator: 'codex_exec', source: 'exec' }, new Date(NOW.getTime() - 1000), turnContext(`gpt-6.1-sol-${CANARY_CONTENT}`, 'Ultra'));
+    const claude = new ClaudeCodeAdapter([claudeRoot]);
+    const { host, logs } = makeHost({ adapters: [{ adapter: claude }, { adapter: new CodexAdapter([codexRoot], () => claude.mains()) }], host: linuxHost(home), projects });
+    const all: CanonicalEventInput[] = [...await host.tick(NOW), ...await host.tick(at(3))];
+    const seen = all.filter((e) => e.type === 'session.observed') as Extract<CanonicalEventInput, { type: 'session.observed' }>[];
+    expect(seen.map((e) => `${e.maker}/${e.model}/${e.effort}`).sort()).toEqual(['anthropic/opus/high', 'moonshot/kimi/medium', 'openai/sol/max']);
+    assertNoLeak(all, logs, ['demo1']);
+    const blob = JSON.stringify(all) + logs.join('\n');
+    for (const raw of ['20261001', 'k2-thinking', 'claude-opus', '6.1']) expect(blob).not.toContain(raw);
+  });
 
   it('the leak check itself catches a leak (a deliberately broken adapter fails it)', async () => {
     const leaky: Adapter = {

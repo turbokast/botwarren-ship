@@ -4,8 +4,8 @@
  * Layout (verified): <projects>/<proj-slug>/<masterSessionId>.jsonl           (the master)
  *                    <projects>/<proj-slug>/<masterSessionId>/subagents/agent-<agentId>.jsonl
  * Every sub-agent becomes its own session: role 'subagent', parentKey = the master's session key,
- * project inherited from the master, model family from the log's top-level `requestedModel` string.
- * Only file names, mtimes and the single `requestedModel` field are read; no prompt or content is kept.
+ * project inherited from the master, model maker + line and reasoning effort from the log's top-level `requestedModel` / `effort` and `message.model`
+ * (classified by core `classifyModel`; the raw id never leaves this module). Only file names, mtimes and those fields are read; no prompt or content is kept.
  *
  * State (inferred from mtime): appended within workingMs -> working; otherwise idle; quiet for more than
  * endedMs (2 min: sub-agents are short-lived) -> session.ended. A vanished master ends its sub-agents.
@@ -13,19 +13,17 @@
 import { closeSync, fstatSync, openSync, readSync, readdirSync, statSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
-import type { CanonicalEventInput } from '../vendor/core/contract.ts';
-import type { AreaProbe, ClaudeLogTail } from './sessionlog.ts';
+import { classifyModel, type CanonicalEventInput } from '../vendor/core/contract.ts';
+import { identityOfLine, readTailIdentity, sameIdentity, type AreaProbe, type ClaudeLogTail, type LogIdentity } from './sessionlog.ts';
 
-export type ModelFamily = 'opus' | 'sonnet' | 'haiku' | 'other';
-
-/** Model family from a model string such as "haiku", "claude-sonnet-4-5" or "opus[1m]". */
-export function modelFamily(requested: string | null | undefined): ModelFamily | undefined {
+/**
+ * Context-window family of a model string such as "haiku", "claude-sonnet-4-5" or "opus[1m]": ONLY for sizing the context gauge
+ * (contextfill.ts), where just the three Claude lines with a known window count. Public model identity is `classifyModel`.
+ */
+export function modelFamily(requested: string | null | undefined): 'opus' | 'sonnet' | 'haiku' | 'other' | undefined {
   if (typeof requested !== 'string' || requested.length === 0 || requested.length > 200) return undefined;
-  const m = requested.toLowerCase();
-  if (m.includes('opus')) return 'opus';
-  if (m.includes('sonnet')) return 'sonnet';
-  if (m.includes('haiku')) return 'haiku';
-  return 'other';
+  const m = classifyModel(requested)?.model;
+  return m === 'opus' || m === 'sonnet' || m === 'haiku' ? m : 'other';
 }
 
 const WINDOWS = [64 * 1024, 1024 * 1024];
@@ -90,13 +88,15 @@ export interface SubagentOptions {
   endedMs?: number;
   reobserveMs?: number;
   discoverMs?: number;
+  /** minimum gap between two reads of a sub-agent log for its model/effort */
+  identMs?: number;
   maxPerParent?: number;
   maxTotal?: number;
 }
 
 interface Sub {
   key: string; parentKey: string; path: string; status: 'working' | 'idle' | null; projectId: string | null;
-  lastEmit: number; model: ModelFamily | undefined; modelTries: number; emittedModel: ModelFamily | undefined;
+  lastEmit: number; ident: LogIdentity; identTries: number; identAt: number; emittedIdent: LogIdentity | undefined;
 }
 
 const sha = (...p: string[]) => createHash('sha256').update(p.join('\0')).digest('hex');
@@ -107,7 +107,7 @@ export class SubagentWatcher {
   private readonly lastDiscover = new Map<string, number>();
 
   constructor(o: SubagentOptions) {
-    this.o = { workingMs: 20_000, endedMs: 120_000, reobserveMs: 120_000, discoverMs: 6_000, maxPerParent: 40, maxTotal: 200, ...o };
+    this.o = { workingMs: 20_000, endedMs: 120_000, reobserveMs: 120_000, discoverMs: 6_000, identMs: 8_000, maxPerParent: 40, maxTotal: 200, ...o };
   }
   get trackedCount(): number { return this.subs.size; }
 
@@ -123,7 +123,7 @@ export class SubagentWatcher {
       let m: number;
       try { m = statSync(path).mtimeMs; } catch { continue; }
       if (nowMs - m > this.o.endedMs) continue; // only recent sub-agents are of interest
-      this.subs.set(path, { key: `${parent.key}/${basename(e.name, '.jsonl')}`.slice(0, 128), parentKey: parent.key, path, status: null, projectId: null, lastEmit: 0, model: undefined, modelTries: 0, emittedModel: undefined });
+      this.subs.set(path, { key: `${parent.key}/${basename(e.name, '.jsonl')}`.slice(0, 128), parentKey: parent.key, path, status: null, projectId: null, lastEmit: 0, ident: {}, identTries: 0, identAt: -Infinity, emittedIdent: undefined });
       n++;
     }
   }
@@ -148,13 +148,20 @@ export class SubagentWatcher {
         continue;
       }
       const status: 'working' | 'idle' = age <= this.o.workingMs ? 'working' : 'idle';
-      if (s.model === undefined && s.modelTries < 5) {
-        s.modelTries++;
-        s.model = modelFamily(readLogMeta(s.path, ['requestedModel']).requestedModel);
+      // model + effort: the newest assistant line of the sub-agent's own log (it can change per turn, so re-read while the file is being written,
+      // at most every `identMs`, every second while no model is known yet); a brand-new log may have no assistant line yet, so the top-level `requestedModel` of the first lines is tried too.
+      if (nowMs - s.identAt >= (s.ident.model === undefined ? 1_000 : this.o.identMs) && (age <= this.o.workingMs || s.ident.model === undefined) && s.identTries < 100) {
+        s.identAt = nowMs; s.identTries++;
+        const found = readTailIdentity(s.path);
+        if (found.model === undefined && s.ident.model === undefined) {
+          const rm = readLogMeta(s.path, ['requestedModel', 'effort']);
+          const head = identityOfLine({ requestedModel: rm.requestedModel, effort: rm.effort });
+          s.ident = { ...head, ...s.ident };
+        } else s.ident = { ...s.ident, ...found };
       }
-      const changed = s.status !== status || s.projectId !== parent.projectId || s.emittedModel !== s.model;
+      const changed = s.status !== status || s.projectId !== parent.projectId || s.emittedIdent === undefined || !sameIdentity(s.emittedIdent, s.ident);
       if (changed || s.lastEmit === 0 || nowMs - s.lastEmit >= this.o.reobserveMs) {
-        s.status = status; s.projectId = parent.projectId; s.lastEmit = nowMs; s.emittedModel = s.model;
+        s.status = status; s.projectId = parent.projectId; s.lastEmit = nowMs; s.emittedIdent = { ...s.ident };
         out.push(this.observed(s, now));
       }
       const tail = this.o.tailFor?.(s.path);
@@ -178,7 +185,8 @@ export class SubagentWatcher {
       sessionKey: s.key, harness: 'claude', status: s.status ?? 'unknown', projectId: s.projectId,
       // derived through the parent link and file layout: always inferred
       attribution: s.projectId ? { method: 'cwd_registry', certainty: 'inferred' } : { method: 'none', certainty: 'unknown' },
-      workCategory: 'unknown', role: 'subagent', parentKey: s.parentKey, ...(s.model ? { model: s.model } : {}),
+      workCategory: 'unknown', role: 'subagent', parentKey: s.parentKey,
+      ...(s.ident.maker ? { maker: s.ident.maker } : {}), ...(s.ident.model ? { model: s.ident.model } : {}), ...(s.ident.effort ? { effort: s.ident.effort } : {}),
       private: { log: basename(s.path), parent: s.parentKey },
     };
   }

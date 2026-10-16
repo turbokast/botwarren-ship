@@ -23,7 +23,7 @@ export function eventsToObservations(events: CanonicalEventInput[], tool: 'claud
       const launch = tool === 'codex' ? (/exec/i.test(String(priv.originator ?? '')) || /exec/i.test(String(priv.source ?? '')) ? 'exec' : 'interactive') : undefined;
       out.push({
         kind: 'session', key: e.sessionKey, tool, harness: tool === 'codex' ? 'codex' : 'claude', status: e.status, role: e.role ?? 'main',
-        ...(e.parentKey ? { parentKey: e.parentKey } : {}), ...(e.model ? { model: e.model } : {}),
+        ...(e.parentKey ? { parentKey: e.parentKey } : {}), ...(e.maker ? { maker: e.maker } : {}), ...(e.model ? { model: e.model } : {}), ...(e.effort ? { effort: e.effort } : {}),
         projectId: e.projectId, certainty: 'inferred',
         correlate: m ? [{ type: m[1] === 'claude' ? 'claude-session' : 'codex-session', id: m[2]! }] : [],
         local: { ...(cwd ? { cwd } : {}), ...(log ? { log } : {}), ...(launch ? { launch } : {}) },
@@ -53,7 +53,7 @@ export class ClaudeCodeAdapter implements Adapter {
     this.manifest = {
       id: 'claude-code', apiVersion: ADAPTER_API_VERSION, version: '1.0.0', platforms: ['win32', 'darwin', 'linux'],
       reads: [
-        { kind: 'dir', target: dirs[0] ?? '~/.claude/projects', keeps: 'session log file names and write times; the project folder (cwd) of the newest lines; tool names, error flags, model family and numeric token counts (bucketed). Never message text. Only while you turn on Code map (off by default): the file path of a Read/Edit/Write-style tool call, on this computer, to pick an area number; the path is not kept or sent.' },
+        { kind: 'dir', target: dirs[0] ?? '~/.claude/projects', keeps: 'session log file names and write times; the project folder (cwd) of the newest lines; tool names, error flags, the model maker and line (the exact model name or version is dropped on this computer), the reasoning effort level and numeric token counts (bucketed). Never message text. Only while you turn on Code map (off by default): the file path of a Read/Edit/Write-style tool call, on this computer, to pick an area number; the path is not kept or sent.' },
       ],
       capabilities: { state: true, toolCategory: true, errors: true, subagents: true, tokens: true, hierarchy: false },
       upstream: { name: 'Claude Code', tested: 'JSONL session logs, 2026-10', verification: 'live' },
@@ -83,7 +83,7 @@ export class CodexAdapter implements Adapter {
     this.manifest = {
       id: 'codex', apiVersion: ADAPTER_API_VERSION, version: '1.0.0', platforms: ['win32', 'darwin', 'linux'],
       reads: [
-        { kind: 'dir', target: dirs[0] ?? '~/.codex/sessions', keeps: 'rollout file names and write times; ONLY id, cwd, originator and source of the first line. Never base instructions or messages.' },
+        { kind: 'dir', target: dirs[0] ?? '~/.codex/sessions', keeps: 'rollout file names and write times; ONLY id, cwd, originator and source of the first line, plus the model (reduced here to maker and line, never the exact name or version) and the reasoning effort level of the newest turn setting line. Never base instructions or messages.' },
       ],
       capabilities: { state: true, toolCategory: false, errors: false, subagents: false, tokens: false, hierarchy: true },
       upstream: { name: 'Codex CLI', tested: 'rollout JSONL, 2026-10', verification: 'live' },

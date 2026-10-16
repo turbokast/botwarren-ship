@@ -6,6 +6,20 @@ A release is only built from a dated entry in this file: the release workflow ta
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-16
+
+Crew bodies that match their model: the agent now reports which family of model each agent runs and how hard it is thinking, never the exact model.
+
+### Added
+
+- **Model family and effort level.** For Claude Code (main sessions and sub-agents), Codex and Ninox, the agent reads the model and reasoning effort from the session's local log on your computer and sends only two coarse values: the maker and model line from a fixed public list (for example "Anthropic / Opus" or "OpenAI / GPT"; anything not on the list is sent as "other"), and an effort level from low to max. Your crew on botwarren.com take that body and show the effort on their chest. The exact model name or version, prompts and settings never leave the computer; a canary test checks that raw model ids are never sent.
+- A change of model or effort during a session is picked up and sent again.
+
+### Changed
+
+- Codex sessions no longer report a fixed model; they report what the session's newest turn actually used, or nothing.
+- Ninox no longer guesses a model from the agent type; it reports a model only when Ninox does.
+
 ## [0.8.0] - 2026-10-15
 
 Code map: an optional, off-by-default view of where in each project your crew is working.
