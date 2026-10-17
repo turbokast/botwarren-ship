@@ -86,6 +86,25 @@ export interface ReplicatorConfig {
   random?: () => number;
 }
 
+/** A request gets this long (headers and body); then it is aborted. */
+const REQUEST_TIMEOUT_MS = 10_000;
+/** A publish not settled by then is abandoned whatever the fetch does: a request that never settles must not keep `busy` set and the ship offline. */
+export const PUBLISH_DEADLINE_MS = 15_000;
+
+/** Runs `work` with a signal aborted after `timeoutMs`; rejects at `deadlineMs` even if `work` never settles. */
+export async function withDeadline<T>(work: (signal: AbortSignal) => Promise<T>, timeoutMs: number, deadlineMs: number): Promise<T> {
+  const ctl = new AbortController();
+  const soft = setTimeout(() => ctl.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError')), timeoutMs);
+  let hard: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([work(ctl.signal), new Promise<never>((_, reject) => {
+      hard = setTimeout(() => { ctl.abort(); reject(new Error('publish did not finish in time')); }, deadlineMs);
+    })]);
+  } finally {
+    clearTimeout(soft); clearTimeout(hard);
+  }
+}
+
 export class Replicator {
   private reader: PublicStoreReader;
   private busy = false;
@@ -120,50 +139,55 @@ export class Replicator {
     this.lastAttemptMs = this.now();
     this.jitter = 0.9 + this.rand() * 0.2;
     try {
-      const m = this.reader.meta();
-      this.lastMetaSig = metaSig(m);
-      const events = this.cfg.holdEvents?.() ? [] : this.reader.after(this.cursor, 200);
-      const res = await (this.cfg.fetchImpl ?? fetch)(this.cfg.url, {
-        method: 'POST',
-        headers: { ...(this.cfg.headers ?? {}), authorization: `Bearer ${this.cfg.secret}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ meta: { paused: m.paused === '1', delaySeconds: Number(m.delay_seconds ?? 90), demo: m.demo === '1', epoch: m.epoch ?? '0', ...(m.ship ? { ship: JSON.parse(m.ship) } : {}) }, events }),
-        signal: AbortSignal.timeout(10_000),
-        redirect: 'error', // the bearer secret must never follow a redirect
-      });
-      if (!res.ok) {
-        if (res.status === 401) { this.unauthorized = { count: this.unauthorized.count + 1, since: this.unauthorized.since ?? this.now() }; } else this.unauthorized = { count: 0, since: null };
-        // 503/429/507 carry Retry-After and the cadence to use afterwards (the body is small JSON; anything else is ignored)
-        const wait = parseRetryAfter(res.headers.get('retry-after'), this.now());
-        if (wait !== null) this.retryAtMs = this.now() + wait;
-        try { const c = parseCadence(JSON.parse(await readCappedText(res, MAX_REPLICA_RESPONSE))); if (c) this.cadence = c; } catch { /* no usable body */ }
-        throw new Error(`replica HTTP ${res.status}`);
-      }
-      const r = JSON.parse(await readCappedText(res, MAX_REPLICA_RESPONSE)) as { maxSeq?: unknown; settings?: unknown; laneReset?: unknown; nextIntervalMs?: unknown; minIntervalMs?: unknown };
-      // The remote's max seq is the cursor. It may move BACK (a wiped remote refills from the start) but never past what exists locally:
-      // a server must not be able to talk the agent into skipping events it has not sent yet, or into a nonsense cursor.
-      const ack = r.maxSeq;
-      if (typeof ack !== 'number' || !Number.isInteger(ack) || ack < 0 || ack > MAX_SEQ) throw new Error('replica sent an invalid cursor');
-      if (ack > this.reader.maxSeq()) throw new Error('replica cursor is beyond the local log');
-      // The exception is a lane reset (this installation just became the ship's agent, e.g. after pairing): the remote only restarted ITS
-      // count for this installation, the history is already there, so the cursor never moves backwards and old events are not resent.
-      this.cfg.store.setSetting('replica_cursor', String(r.laneReset === true ? Math.max(this.cursor, ack) : ack));
-      const settings = ReplicaSettings.safeParse(r.settings);
-      this.settings = settings.success ? settings.data : null;
-      this.cadence = parseCadence(r) ?? DEFAULT_CADENCE; // a server that stops sending it (a rollback) puts us back on the old cadence
-      this.fails = 0; this.retryAtMs = 0; this.unauthorized = { count: 0, since: null };
-      this.cfg.onSettings?.(this.settings);
-      this.lastOkAt = new Date().toISOString();
-      this.lastError = null;
-      return events.length;
+      return await withDeadline((signal) => this.publish(signal), REQUEST_TIMEOUT_MS, PUBLISH_DEADLINE_MS);
     } catch (e) {
       this.lastError = (e as Error).message;
       this.fails++;
-      // Retry-After (set above) wins; otherwise back off exponentially from the flush interval, with jitter, up to a minute
+      // Retry-After (set in publish) wins; otherwise back off exponentially from the flush interval, with jitter, up to a minute
       if (this.retryAtMs <= this.now()) this.retryAtMs = this.now() + Math.round(Math.min(BACKOFF_CEILING_MS, this.cadence.minMs * 2 ** Math.min(this.fails - 1, 6)) * this.jitter);
       return 0;
     } finally {
       this.busy = false;
     }
+  }
+
+  private async publish(signal: AbortSignal): Promise<number> {
+    const m = this.reader.meta();
+    this.lastMetaSig = metaSig(m);
+    const events = this.cfg.holdEvents?.() ? [] : this.reader.after(this.cursor, 200);
+    const res = await (this.cfg.fetchImpl ?? fetch)(this.cfg.url, {
+      method: 'POST',
+      headers: { ...(this.cfg.headers ?? {}), authorization: `Bearer ${this.cfg.secret}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ meta: { paused: m.paused === '1', delaySeconds: Number(m.delay_seconds ?? 90), demo: m.demo === '1', epoch: m.epoch ?? '0', ...(m.ship ? { ship: JSON.parse(m.ship) } : {}) }, events }),
+      signal,
+      redirect: 'error', // the bearer secret must never follow a redirect
+    });
+    if (!res.ok) {
+      if (res.status === 401) { this.unauthorized = { count: this.unauthorized.count + 1, since: this.unauthorized.since ?? this.now() }; } else this.unauthorized = { count: 0, since: null };
+      // 503/429/507 carry Retry-After and the cadence to use afterwards (the body is small JSON; anything else is ignored)
+      const wait = parseRetryAfter(res.headers.get('retry-after'), this.now());
+      if (wait !== null) this.retryAtMs = this.now() + wait;
+      try { const c = parseCadence(JSON.parse(await readCappedText(res, MAX_REPLICA_RESPONSE))); if (c) this.cadence = c; } catch { /* no usable body */ }
+      throw new Error(`replica HTTP ${res.status}`);
+    }
+    const r = JSON.parse(await readCappedText(res, MAX_REPLICA_RESPONSE)) as { maxSeq?: unknown; settings?: unknown; laneReset?: unknown; nextIntervalMs?: unknown; minIntervalMs?: unknown };
+    // The remote's max seq is the cursor. It may move BACK (a wiped remote refills from the start) but never past what exists locally:
+    // a server must not be able to talk the agent into skipping events it has not sent yet, or into a nonsense cursor.
+    const ack = r.maxSeq;
+    if (typeof ack !== 'number' || !Number.isInteger(ack) || ack < 0 || ack > MAX_SEQ) throw new Error('replica sent an invalid cursor');
+    if (ack > this.reader.maxSeq()) throw new Error('replica cursor is beyond the local log');
+    signal.throwIfAborted(); // an abandoned publish must not move the cursor under a newer one
+    // The exception is a lane reset (this installation just became the ship's agent, e.g. after pairing): the remote only restarted ITS
+    // count for this installation, the history is already there, so the cursor never moves backwards and old events are not resent.
+    this.cfg.store.setSetting('replica_cursor', String(r.laneReset === true ? Math.max(this.cursor, ack) : ack));
+    const settings = ReplicaSettings.safeParse(r.settings);
+    this.settings = settings.success ? settings.data : null;
+    this.cadence = parseCadence(r) ?? DEFAULT_CADENCE; // a server that stops sending it (a rollback) puts us back on the old cadence
+    this.fails = 0; this.retryAtMs = 0; this.unauthorized = { count: 0, since: null };
+    this.cfg.onSettings?.(this.settings);
+    this.lastOkAt = new Date().toISOString();
+    this.lastError = null;
+    return events.length;
   }
 
   private now(): number { return this.cfg.now?.() ?? Date.now(); }

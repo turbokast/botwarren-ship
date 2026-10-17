@@ -1,6 +1,6 @@
 {
   "name": "botwarren-ship",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "private": true,
   "description": "Botwarren ship agent: turns what your AI coding agents are doing into a delayed, metadata-only status feed.",
   "license": "Apache-2.0",

@@ -6,6 +6,12 @@ A release is only built from a dated entry in this file: the release workflow ta
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-17
+
+### Fixed
+
+- **A ship could stay offline while the agent kept running.** If one publish to botwarren.com never finished (seen after a short network outage), the agent waited on it forever and sent nothing more until it was restarted, so the ship showed as offline. Each publish now gets a fixed time to finish (10 seconds for the request, 15 at most in total). After that it is given up and the next one goes out. A reply that arrives after it was given up is ignored.
+
 ## [0.9.0] - 2026-10-16
 
 Crew bodies that match their model: the agent now reports which family of model each agent runs and how hard it is thinking, never the exact model.
